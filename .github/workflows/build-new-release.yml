@@ -3,12 +3,13 @@ name: Build New Release
 on:
   pull_request:
     types: [closed]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: ${{ github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')) }}
     steps:
       - uses: actions/checkout@v6
         with:
