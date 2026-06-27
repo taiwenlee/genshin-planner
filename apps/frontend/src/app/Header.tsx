@@ -13,6 +13,7 @@ import MenuIcon from '@mui/icons-material/Menu'
 import PeopleIcon from '@mui/icons-material/People'
 import ScannerIcon from '@mui/icons-material/Scanner'
 import SettingsIcon from '@mui/icons-material/Settings'
+import WaterDropIcon from '@mui/icons-material/WaterDrop'
 import {
   AppBar,
   Avatar,
@@ -83,6 +84,12 @@ const tools: ITab = {
   to: '/tools',
   value: 'tools',
 }
+const resinPlanner: ITab = {
+  i18Key: 'tabs.resinPlanner',
+  icon: <WaterDropIcon />,
+  to: '/resin-planner',
+  value: 'resin-planner',
+}
 const scanner: ITab = {
   i18Key: 'tabs.scanner',
   icon: <ScannerIcon />,
@@ -138,6 +145,7 @@ const maincontent = [
   weapons,
   characters,
   teams,
+  resinPlanner,
   archive,
   tools,
   scanner,
@@ -257,6 +265,7 @@ const mobileContent = [
   weapons,
   characters,
   teams,
+  resinPlanner,
   archive,
   tools,
   scanner,

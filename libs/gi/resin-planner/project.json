@@ -1,0 +1,7 @@
+{
+  "name": "gi-resin-planner",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/gi/resin-planner/src",
+  "projectType": "library",
+  "tags": []
+}

@@ -49,6 +49,9 @@ const PageCharacters = lazy(
 )
 const PageTeams = lazy(() => import('@genshin-optimizer/gi/page-teams'))
 const PageTeam = lazy(() => import('@genshin-optimizer/gi/page-team'))
+const PageResinPlanner = lazy(
+  () => import('@genshin-optimizer/gi/page-resin-planner')
+)
 
 function App() {
   const dbIndex = parseInt(localStorage.getItem('dbIndex') || '1')
@@ -160,6 +163,7 @@ function Content() {
                 <Route index element={<PageTeams />} />
                 <Route path=":teamId/*" element={<PageTeam />} />
               </Route>
+              <Route path="/resin-planner" element={<PageResinPlanner />} />
               <Route path="/archive/*" element={<PageArchive />} />
               <Route path="/tools" element={<PageTools />} />
               <Route path="/setting" element={<PageSettings />} />

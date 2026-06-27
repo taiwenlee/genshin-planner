@@ -99,6 +99,9 @@
       ],
       "@genshin-optimizer/gi/page-doc": ["libs/gi/page-doc/src/index.tsx"],
       "@genshin-optimizer/gi/page-home": ["libs/gi/page-home/src/index.tsx"],
+      "@genshin-optimizer/gi/page-resin-planner": [
+        "libs/gi/page-resin-planner/src/index.tsx"
+      ],
       "@genshin-optimizer/gi/page-scanner": [
         "libs/gi/page-scanner/src/index.tsx"
       ],
@@ -113,6 +116,9 @@
       ],
       "@genshin-optimizer/gi/prisma-schema": [
         "libs/gi/prisma-schema/src/index.ts"
+      ],
+      "@genshin-optimizer/gi/resin-planner": [
+        "libs/gi/resin-planner/src/index.ts"
       ],
       "@genshin-optimizer/gi/schema": ["libs/gi/schema/src/index.ts"],
       "@genshin-optimizer/gi/sheets": ["libs/gi/sheets/src/index.ts"],

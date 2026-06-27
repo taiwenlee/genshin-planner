@@ -51,6 +51,10 @@ import Content from './CharacterDisplay/Content'
 import TeamCharacterSelector from './TeamCharacterSelector'
 import TeamSetting from './TeamSetting'
 
+export { default as OptimizationTargetSelector } from './CharacterDisplay/Tabs/TabOptimize/Components/OptimizationTargetSelector'
+export type { TargetSelectorModalProps } from './CharacterDisplay/Tabs/TabOptimize/Components/TargetSelectorModal'
+export { TargetSelectorModal } from './CharacterDisplay/Tabs/TabOptimize/Components/TargetSelectorModal'
+
 export default function PageTeam() {
   const database = useDatabase()
   const { teamId } = useParams<{ teamId?: string }>()
