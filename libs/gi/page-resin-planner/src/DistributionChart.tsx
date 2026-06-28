@@ -68,8 +68,8 @@ export function DistributionChart({
   if (!selectedTeamIds.length || !charKeys.length)
     return (
       <Typography color="text.secondary">
-        Select teams and an optimization target per character to see the
-        damage distribution.
+        Select teams and an optimization target per character to see the damage
+        distribution.
       </Typography>
     )
 

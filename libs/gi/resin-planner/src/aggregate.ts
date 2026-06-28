@@ -31,9 +31,7 @@ export function aggregateActionAcrossTeams(
   action: ResinAction
 ): AggregatedActionEfficiency {
   const actingTeamIds = new Set(
-    targets
-      .filter((t) => t.charKey === action.charKey)
-      .map((t) => t.teamId)
+    targets.filter((t) => t.charKey === action.charKey).map((t) => t.teamId)
   )
   const relevantTargets = targets.filter((t) => actingTeamIds.has(t.teamId))
   const perTeam = relevantTargets.map((target) =>

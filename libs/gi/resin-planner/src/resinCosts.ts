@@ -192,7 +192,8 @@ export const ARTIFACT_FODDER_CONVERSION_RATE = 4 / 5
  */
 export function resinCostToLevelArtifact(rarity: ArtifactRarity): number {
   const effectiveExpNeeded =
-    ARTIFACT_CUMULATIVE_EXP_TO_MAX_LEVEL[rarity] / ARTIFACT_FODDER_CONVERSION_RATE
+    ARTIFACT_CUMULATIVE_EXP_TO_MAX_LEVEL[rarity] /
+    ARTIFACT_FODDER_CONVERSION_RATE
   return effectiveExpNeeded * RESIN_PER_MORA
 }
 

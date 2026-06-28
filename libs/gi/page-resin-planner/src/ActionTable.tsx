@@ -6,6 +6,7 @@ import type {
 } from '@genshin-optimizer/gi/consts'
 import { allArtifactRarityKeys } from '@genshin-optimizer/gi/consts'
 import { useDatabase } from '@genshin-optimizer/gi/db-ui'
+import { useDBMeta } from '@genshin-optimizer/gi/db-ui'
 import type {
   AggregatedActionEfficiency,
   ResinAction,
@@ -18,8 +19,7 @@ import {
   scoreNodeForTeamMember,
 } from '@genshin-optimizer/gi/resin-planner'
 import { getArtSetStat } from '@genshin-optimizer/gi/stats'
-import { CharacterName, CharIconSide } from '@genshin-optimizer/gi/ui'
-import { useDBMeta } from '@genshin-optimizer/gi/db-ui'
+import { CharIconSide, CharacterName } from '@genshin-optimizer/gi/ui'
 import LoadingButton from '@mui/lab/LoadingButton'
 import {
   Box,
@@ -77,7 +77,7 @@ function maxRarityForSet(setKey: ArtifactSetKey): ArtifactRarity {
   const rarities = getArtSetStat(setKey).rarities.filter((r: number) =>
     allArtifactRarityKeys.includes(r as ArtifactRarity)
   ) as ArtifactRarity[]
-  return rarities.length ? Math.max(...rarities) as ArtifactRarity : 5
+  return rarities.length ? (Math.max(...rarities) as ArtifactRarity) : 5
 }
 
 function describeAction(action: DisplayAction): string {
@@ -176,7 +176,8 @@ export function ActionTable({
         const relevantCount = scoreTargets.filter(
           (t) => t.charKey === charKey
         ).length
-        totalUnits += buildResinActions(database, charKey).length * relevantCount
+        totalUnits +=
+          buildResinActions(database, charKey).length * relevantCount
         totalUnits += 1 // single combined artifact-farm estimate
         totalUnits += altSetsByChar[charKey]?.length ?? 0 // one per alt-set comparison
       }
@@ -299,9 +300,7 @@ export function ActionTable({
       const paidWithPercentEfficiency = paid.map((row) => ({
         ...row,
         efficiency:
-          (percentDelta(row) / row.avgResinCost) *
-          100 *
-          EFFICIENCY_RESIN_UNIT,
+          (percentDelta(row) / row.avgResinCost) * 100 * EFFICIENCY_RESIN_UNIT,
       }))
       paidWithPercentEfficiency.sort((a, b) => b.efficiency - a.efficiency)
 
@@ -421,9 +420,7 @@ function RankedActionsTable({
                 <TableCell align="right">
                   {row.avgResinCost.toFixed(0)}
                 </TableCell>
-                <TableCell align="right">
-                  {row.efficiency.toFixed(3)}
-                </TableCell>
+                <TableCell align="right">{row.efficiency.toFixed(3)}</TableCell>
               </TableRow>
             )
           })}

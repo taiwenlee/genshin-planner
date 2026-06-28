@@ -1,7 +1,4 @@
-import type {
-  AscensionKey,
-  CharacterKey,
-} from '@genshin-optimizer/gi/consts'
+import type { AscensionKey, CharacterKey } from '@genshin-optimizer/gi/consts'
 import { ascensionMaxLevel } from '@genshin-optimizer/gi/consts'
 import type { ArtCharDatabase } from '@genshin-optimizer/gi/db'
 import type { ResinAction } from '@genshin-optimizer/gi/resin-planner'

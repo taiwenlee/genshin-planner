@@ -13,7 +13,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { ActionTable } from './ActionTable'
 import { DistributionChart } from './DistributionChart'
 import { TeamSelector } from './TeamSelector'
-import { targetSelectionKey, type TargetSelectionState } from './types'
+import { type TargetSelectionState, targetSelectionKey } from './types'
 
 export default function PageResinPlanner() {
   useTitle('Resin Planner')
@@ -45,9 +45,7 @@ export default function PageResinPlanner() {
         if (!team) return []
         return team.loadoutData
           .filter(
-            (
-              loadoutDatum
-            ): loadoutDatum is NonNullable<typeof loadoutDatum> =>
+            (loadoutDatum): loadoutDatum is NonNullable<typeof loadoutDatum> =>
               !!loadoutDatum
           )
           .map((loadoutDatum) => {
@@ -86,7 +84,9 @@ export default function PageResinPlanner() {
         <CardHeader title="Resin Planner" />
         <Divider />
         <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <Typography variant="h6">1. Select teams & optimization targets</Typography>
+          <Typography variant="h6">
+            1. Select teams & optimization targets
+          </Typography>
           <TeamSelector
             selectedTeamIds={selectedTeamIds}
             onToggle={toggleTeam}

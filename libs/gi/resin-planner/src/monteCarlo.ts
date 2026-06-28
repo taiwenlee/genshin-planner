@@ -78,7 +78,8 @@ export function simulateArtifactDomain(
   }
 
   const expectedDeltaScore = sumPositiveDelta / samples
-  const resinCost = RESIN_COST.artifactDomainRun + resinCostToLevelArtifact(rarity)
+  const resinCost =
+    RESIN_COST.artifactDomainRun + resinCostToLevelArtifact(rarity)
   return {
     samples,
     expectedDeltaScore,
@@ -206,7 +207,8 @@ export async function simulateArtifactDomainAcrossTeams(
   }
 
   const expectedDeltaScore = mean
-  const resinCost = RESIN_COST.artifactDomainRun + resinCostToLevelArtifact(rarity)
+  const resinCost =
+    RESIN_COST.artifactDomainRun + resinCostToLevelArtifact(rarity)
   return {
     samples: n,
     expectedDeltaScore,

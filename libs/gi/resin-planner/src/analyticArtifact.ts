@@ -1,3 +1,4 @@
+import { toPercent } from '@genshin-optimizer/common/util'
 import type {
   ArtifactRarity,
   ArtifactSlotKey,
@@ -14,16 +15,18 @@ import {
   artSlotMainKeys,
   artSubstatRollData,
 } from '@genshin-optimizer/gi/consts'
-import type { ArtCharDatabase } from '@genshin-optimizer/gi/db'
-import { toPercent } from '@genshin-optimizer/common/util'
-import { getMainStatValue, getSubstatValuesPercent } from '@genshin-optimizer/gi/util'
 import type { ArtifactSetKey } from '@genshin-optimizer/gi/consts'
+import type { ArtCharDatabase } from '@genshin-optimizer/gi/db'
+import {
+  getMainStatValue,
+  getSubstatValuesPercent,
+} from '@genshin-optimizer/gi/util'
 import { applyAction } from './actionEfficiency'
 import { cloneDatabase } from './cloneDatabase'
+import type { MonteCarloResult } from './monteCarlo'
 import { RESIN_COST, resinCostToLevelArtifact } from './resinCosts'
 import { scoreNodeForTeamMember } from './teamScore'
 import type { ScoreTarget } from './types'
-import type { MonteCarloResult } from './monteCarlo'
 
 /**
  * Closed-form replacement for `simulateArtifactDomainAcrossTeams`'s sampling
@@ -131,7 +134,7 @@ function erf(x: number): number {
   const p = 0.3275911
   const t = 1 / (1 + p * x)
   const y =
-    1 - (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) * Math.exp(-x * x)
+    1 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * Math.exp(-x * x)
   return sign * y
 }
 const normalCdf = (z: number) => 0.5 * (1 + erf(z / Math.SQRT2))
@@ -200,11 +203,7 @@ function computeGradientForWearer(
   scoreTarget: ScoreTarget,
   baseline: number
 ): Partial<Record<MainSubStatKey, number>> {
-  const teamCharId = findTeamCharId(
-    database,
-    scoreTarget.teamId,
-    wearerCharKey
-  )
+  const teamCharId = findTeamCharId(database, scoreTarget.teamId, wearerCharKey)
   const gradient: Partial<Record<MainSubStatKey, number>> = {}
   if (!teamCharId) return gradient
   const teamChar = database.teamChars.get(teamCharId)
@@ -436,7 +435,7 @@ function slotFarmEstimate(
   slotKey: ArtifactSlotKey,
   rarity: ArtifactRarity,
   gradient: Partial<Record<MainSubStatKey, number>>
-): { expectedValue: number; probKeep: number } {
+): SlotFarmBreakdown {
   const char = database.chars.get(charKey)
   const artId = char?.equippedArtifacts[slotKey]
   const oldArt = artId ? database.arts.get(artId) : undefined
@@ -453,17 +452,31 @@ function slotFarmEstimate(
   const mainCandidates = artSlotMainKeys[slotKey]
   const maxLevel = artMaxLevel[rarity]
 
-  let expectedValue = 0
-  let probKeep = 0
+  let probabilityRightMainStat = 0
+  let probabilityWorthLeveling = 0
+  let averageDamageChange = 0
   for (const mainKey of mainCandidates) {
     const probability = mainStatProbability(slotKey, mainKey)
     if (!probability) continue
     const raw = getMainStatValue(mainKey, rarity, maxLevel)
     const value = mainKey.endsWith('_') ? toPercent(raw, mainKey) : raw
-    const mainDelta = (gradient[mainKey] ?? 0) * value - oldMainContribution
+    const ownContribution = (gradient[mainKey] ?? 0) * value
+    const mainDelta = ownContribution - oldMainContribution
 
-    // Pass 1: wrong main stat — fodder on sight, substats don't matter.
-    if (mainDelta <= 0) continue
+    // Pass 1: strictly worse main stat — fodder on sight, substats don't
+    // matter. A *tie* (mainDelta === 0, e.g. the same already-optimal main
+    // stat type/value you're already running) must still fall through to
+    // pass 2 — "same main, possibly better substats" is the single most
+    // realistic and valuable outcome once you're already on the right main
+    // stat, so excluding it here would zero out nearly every drop for an
+    // already-well-built character. But a tie only counts if the stat
+    // itself has real value (`ownContribution > 0`) — otherwise "tied at
+    // zero" just means two equally-irrelevant stats (e.g. HP%/DEF%/ER% on
+    // a kit that doesn't use them), not "tied at good," and would
+    // otherwise slip through whenever the currently-equipped main happens
+    // to also be irrelevant.
+    if (mainDelta < 0 || ownContribution <= 0) continue
+    probabilityRightMainStat += probability
 
     // Pass 2: right main stat — evaluate the substat roll probabilistically.
     const excludesSubstat = (allSubstatKeys as readonly string[]).includes(
@@ -477,11 +490,16 @@ function slotFarmEstimate(
       )
     const totalMean = mainDelta + substatMean - oldSubstatContribution
 
-    expectedValue +=
+    averageDamageChange +=
       probability * expectedPositivePart(totalMean, substatVariance)
-    probKeep += probability * probabilityPositive(totalMean, substatVariance)
+    probabilityWorthLeveling +=
+      probability * probabilityPositive(totalMean, substatVariance)
   }
-  return { expectedValue, probKeep }
+  return {
+    probabilityRightMainStat,
+    probabilityWorthLeveling,
+    averageDamageChange,
+  }
 }
 
 /**
@@ -623,6 +641,24 @@ export function estimateArtifactSetSwitchAnalytic(
 }
 
 /**
+ * Per-slot breakdown of the same two-pass heuristic `slotFarmEstimate`
+ * computes — surfaced separately (not just blended into one number) so
+ * each piece's contribution can be audited individually.
+ */
+export type SlotFarmBreakdown = {
+  /** Probability the main stat that drops is at least as good as what's already equipped (pass 1). Zero means every candidate main stat for this slot is strictly worse than the current piece's — nothing here is worth even checking substats for. */
+  probabilityRightMainStat: number
+  /** Probability a random drop is actually worth leveling at all (pass 1 AND pass 2 combined): right main stat AND the substat roll ends up ahead. */
+  probabilityWorthLeveling: number
+  /** Expected damage change from a random drop in this slot, averaged over every outcome (including the much more common "not worth leveling, contributes 0" outcome) — i.e. the per-slot average referred to by `estimateArtifactFarmAnalytic`'s combined result. */
+  averageDamageChange: number
+}
+
+export type ArtifactFarmResult = MonteCarloResult & {
+  perSlot: Record<ArtifactSlotKey, SlotFarmBreakdown>
+}
+
+/**
  * Analytic (non-Monte-Carlo) estimate of running `charKey`'s artifact
  * domain once — you can't selectively farm a single slot in-game, a run
  * drops artifacts across all 5 slots at once, so this combines all 5 into
@@ -630,36 +666,52 @@ export function estimateArtifactSetSwitchAnalytic(
  * than pretending each slot is a separately-purchasable action. See the
  * module doc comment for why this only covers same-set re-rolls; for set
  * switches see `estimateArtifactSetSwitchAnalytic` above.
+ *
+ * Computed per-slot first (`perSlot`, see `SlotFarmBreakdown`) and then
+ * combined into one true average: each of the 5 slots is equally likely to
+ * be the one a given drop lands in, so the overall average damage change
+ * per drop is the plain average of the 5 slots' individual averages, and
+ * the overall "worth leveling" probability likewise.
  */
 export function estimateArtifactFarmAnalytic(
   database: ArtCharDatabase,
   targets: ScoreTarget[],
   charKey: CharacterKey,
   rarity: ArtifactRarity
-): MonteCarloResult {
+): ArtifactFarmResult {
   const gradient = computeCombinedGradient(database, targets, charKey)
 
-  // Each drop is equally likely to land in any of the 5 slots. Track both
-  // the expected value *if kept* and the probability it's actually worth
-  // leveling at all — most drops aren't (you'd judge the rolled substats
-  // and fodder anything mediocre rather than leveling every single piece),
-  // so charging the leveling cost unconditionally on every drop massively
-  // overstates the real expected resin cost of farming.
-  let valueSum = 0
-  let probKeepSum = 0
+  // Pass 1 (main stat) then pass 2 (substat distribution), computed
+  // separately for each of the 5 pieces.
+  const perSlot = {} as Record<ArtifactSlotKey, SlotFarmBreakdown>
   for (const slotKey of allArtifactSlotKeys) {
-    const { expectedValue, probKeep } = slotFarmEstimate(
+    perSlot[slotKey] = slotFarmEstimate(
       database,
       charKey,
       slotKey,
       rarity,
       gradient
     )
-    valueSum += expectedValue
-    probKeepSum += probKeep
   }
-  const expectedValuePerDrop = valueSum / allArtifactSlotKeys.length
-  const probKeepPerDrop = probKeepSum / allArtifactSlotKeys.length
+
+  // Combine the 5 individually-computed pieces into one true average: each
+  // drop is equally likely to land in any of the 5 slots, so this is a
+  // plain average across them, not a re-derivation.
+  const expectedValuePerDrop =
+    allArtifactSlotKeys.reduce(
+      (sum, slotKey) => sum + perSlot[slotKey].averageDamageChange,
+      0
+    ) / allArtifactSlotKeys.length
+  // Most drops aren't worth leveling at all (you'd judge the rolled
+  // substats and fodder anything mediocre rather than leveling every
+  // single piece), so charging the leveling cost unconditionally on every
+  // drop massively overstates the real expected resin cost of farming —
+  // scale it by the same per-slot "worth leveling" probability.
+  const probKeepPerDrop =
+    allArtifactSlotKeys.reduce(
+      (sum, slotKey) => sum + perSlot[slotKey].probabilityWorthLeveling,
+      0
+    ) / allArtifactSlotKeys.length
 
   const expectedDeltaScore = AVG_ARTIFACTS_PER_DOMAIN_RUN * expectedValuePerDrop
   const resinCost =
@@ -672,5 +724,6 @@ export function estimateArtifactFarmAnalytic(
     expectedDeltaScore,
     resinCost,
     efficiency: expectedDeltaScore / resinCost,
+    perSlot,
   }
 }

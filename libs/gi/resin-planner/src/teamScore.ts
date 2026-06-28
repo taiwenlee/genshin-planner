@@ -66,7 +66,8 @@ function getCharDataBundle(
   const weaponSheet = getWeaponSheet(weapon.key)
   if (!weaponSheet) return undefined
 
-  const weaponSheetsDataOfType = displayDataMap[getCharStat(charInfo.key).weaponType]
+  const weaponSheetsDataOfType =
+    displayDataMap[getCharStat(charInfo.key).weaponType]
   const weaponSheetsData = useCustom
     ? (() => {
         const { display, ...restWeaponSheetData } = weaponSheet.data
@@ -84,7 +85,11 @@ function getCharDataBundle(
   )
   const data = [
     ...artifactData,
-    dataObjForCharacterNew(charInfo, database, useCustom ? sheetData : undefined),
+    dataObjForCharacterNew(
+      charInfo,
+      database,
+      useCustom ? sheetData : undefined
+    ),
     dataObjForWeapon(weapon),
     sheetData,
     common, // NEED TO PUT THIS AT THE END

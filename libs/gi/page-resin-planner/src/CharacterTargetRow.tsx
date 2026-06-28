@@ -1,14 +1,14 @@
 import type { CharacterKey } from '@genshin-optimizer/gi/consts'
 import {
-  useDatabase,
   useDBMeta,
+  useDatabase,
   useOptConfig,
   useTeamChar,
 } from '@genshin-optimizer/gi/db-ui'
 import { OptimizationTargetSelector } from '@genshin-optimizer/gi/page-team'
 import {
-  CharacterName,
   CharIconSide,
+  CharacterName,
   DataContext,
   useTeamDataNoContext,
 } from '@genshin-optimizer/gi/ui'
