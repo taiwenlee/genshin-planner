@@ -30,12 +30,11 @@ import type { ScoreTarget } from './types'
 
 /**
  * Closed-form replacement for `simulateArtifactDomainAcrossTeams`'s sampling
- * loop. Valid ONLY for "farm another piece of the set I already wear here"
- * (the per-slot "Farm domain" action) — NOT for comparing against a
- * different set, since this model only tracks raw stat totals and has no
- * way to represent a 2pc/4pc set-bonus activating or breaking. A full set
- * switch crosses that threshold by definition, so it stays on the exact
- * Monte Carlo path in `monteCarlo.ts`.
+ * loop, used by both `estimateArtifactFarmAnalytic` (same-set re-rolls) and
+ * `estimateArtifactSetSwitchAnalytic` (switching to a different set — the
+ * latter additionally folds in the exact, deterministic set-bonus delta
+ * via `setBonusOnlyDelta`, since that part is a fixed function of piece
+ * count and doesn't need sampling).
  *
  * Method: rather than simulating thousands of random artifacts, this
  * computes the *expected* stat contribution of a random drop in closed
@@ -321,94 +320,6 @@ function substatMeanVariance(
   return { mean, variance }
 }
 
-/** Mean & variance of the random new piece's score contribution (main stat choice + substat rolls), before subtracting the old piece. Main-stat branches are weighted by the real per-slot drop weights (`MAIN_STAT_WEIGHTS`), not uniformly. */
-function newPieceMeanVariance(
-  slotKey: ArtifactSlotKey,
-  rarity: ArtifactRarity,
-  gradient: Partial<Record<MainSubStatKey, number>>
-): { mean: number; variance: number } {
-  const mainCandidates = artSlotMainKeys[slotKey]
-  const maxLevel = artMaxLevel[rarity]
-
-  let mainMean = 0
-  let mainSecondMoment = 0
-  let substatMean = 0
-  // Variance of the substat contribution, mixed across main-stat branches:
-  // E[Var(substats | main)] term of the law of total variance. The other
-  // term, Var(E[substats | main]), is small (branches mostly differ by
-  // whether 1 key is excluded from a ~9-10 key pool) and skipped — fine for
-  // a ballpark.
-  let substatVariance = 0
-  for (const mainKey of mainCandidates) {
-    const p = mainStatProbability(slotKey, mainKey)
-    if (!p) continue
-    const raw = getMainStatValue(mainKey, rarity, maxLevel)
-    const value = mainKey.endsWith('_') ? toPercent(raw, mainKey) : raw
-    const contribution = (gradient[mainKey] ?? 0) * value
-    mainMean += p * contribution
-    mainSecondMoment += p * contribution * contribution
-
-    const excludesSubstat = (allSubstatKeys as readonly string[]).includes(
-      mainKey
-    )
-    const { mean, variance } = substatMeanVariance(
-      excludesSubstat ? mainKey : undefined,
-      rarity,
-      gradient
-    )
-    substatMean += p * mean
-    substatVariance += p * variance
-  }
-  const mainVariance = Math.max(mainSecondMoment - mainMean * mainMean, 0)
-
-  return {
-    mean: mainMean + substatMean,
-    variance: mainVariance + substatVariance,
-  }
-}
-
-/** The currently-equipped piece's exact stat contribution (deterministic, no need to estimate it). */
-function currentPieceStats(
-  database: ArtCharDatabase,
-  charKey: CharacterKey,
-  slotKey: ArtifactSlotKey
-): Partial<Record<MainSubStatKey, number>> {
-  const char = database.chars.get(charKey)
-  const artId = char?.equippedArtifacts[slotKey]
-  const art = artId ? database.arts.get(artId) : undefined
-  if (!art) return {}
-  const stats: Partial<Record<MainSubStatKey, number>> = {}
-  stats[art.mainStatKey] =
-    (stats[art.mainStatKey] ?? 0) +
-    getMainStatValue(art.mainStatKey, art.rarity, art.level)
-  for (const { key, accurateValue } of art.substats)
-    if (key) stats[key] = (stats[key] ?? 0) + accurateValue
-  return stats
-}
-
-/** Mean & variance of a random drop's score *delta* vs. the currently-equipped piece in `slotKey` (new piece's distribution, minus the old piece's exact, deterministic contribution). */
-function slotDeltaMeanVariance(
-  database: ArtCharDatabase,
-  charKey: CharacterKey,
-  slotKey: ArtifactSlotKey,
-  rarity: ArtifactRarity,
-  gradient: Partial<Record<MainSubStatKey, number>>
-): { mean: number; variance: number } {
-  const { mean: newMean, variance } = newPieceMeanVariance(
-    slotKey,
-    rarity,
-    gradient
-  )
-  const oldStats = currentPieceStats(database, charKey, slotKey)
-  let oldContribution = 0
-  for (const [key, value] of Object.entries(oldStats) as [
-    MainSubStatKey,
-    number,
-  ][])
-    oldContribution += (gradient[key] ?? 0) * value
-  return { mean: newMean - oldContribution, variance }
-}
-
 /**
  * Two-stage "would a real player actually level this drop" heuristic for
  * the same-set farm action, instead of treating every random drop as a
@@ -434,7 +345,15 @@ function slotFarmEstimate(
   charKey: CharacterKey,
   slotKey: ArtifactSlotKey,
   rarity: ArtifactRarity,
-  gradient: Partial<Record<MainSubStatKey, number>>
+  gradient: Partial<Record<MainSubStatKey, number>>,
+  /**
+   * A fixed, deterministic offset added to both the pass-1 gate and the
+   * pass-2 mean — used by `estimateArtifactSetSwitchAnalytic` to fold in
+   * this slot's evenly-distributed share of a set-bonus activation/loss,
+   * so "is this drop worth keeping" reflects "same or slightly better than
+   * the current set *including* the set bonus," not stats alone.
+   */
+  extraOffset = 0
 ): SlotFarmBreakdown {
   const char = database.chars.get(charKey)
   const artId = char?.equippedArtifacts[slotKey]
@@ -461,7 +380,7 @@ function slotFarmEstimate(
     const raw = getMainStatValue(mainKey, rarity, maxLevel)
     const value = mainKey.endsWith('_') ? toPercent(raw, mainKey) : raw
     const ownContribution = (gradient[mainKey] ?? 0) * value
-    const mainDelta = ownContribution - oldMainContribution
+    const mainDelta = ownContribution - oldMainContribution + extraOffset
 
     // Pass 1: strictly worse main stat — fodder on sight, substats don't
     // matter. A *tie* (mainDelta === 0, e.g. the same already-optimal main
@@ -474,7 +393,8 @@ function slotFarmEstimate(
     // zero" just means two equally-irrelevant stats (e.g. HP%/DEF%/ER% on
     // a kit that doesn't use them), not "tied at good," and would
     // otherwise slip through whenever the currently-equipped main happens
-    // to also be irrelevant.
+    // to also be irrelevant. `extraOffset` (a set-bonus share) can still
+    // tip an otherwise-losing main stat into "worth it," which is correct.
     if (mainDelta < 0 || ownContribution <= 0) continue
     probabilityRightMainStat += probability
 
@@ -516,6 +436,16 @@ function slotFarmEstimate(
 const AVG_ARTIFACTS_PER_DOMAIN_RUN = 1.065
 
 /**
+ * Standard 5★ artifact domains drop pieces from two different sets mixed
+ * together (e.g. the same domain drops both halves of a "Domain of Guyun"
+ * -style pairing), each drop independently and uniformly one set or the
+ * other — not one set exclusively. So only about half of `AVG_ARTIFACTS_PER_DOMAIN_RUN`
+ * is actually eligible to be the set you're farming; the other half is the
+ * domain's other set and contributes nothing toward `slotKey`/`setKey`.
+ */
+const ARTIFACT_SETS_PER_DOMAIN = 2
+
+/**
  * Exact (not estimated) score delta from a set-bonus threshold change
  * alone: freezes every equipped slot's main/substat values exactly as they
  * are and just relabels `setKey`, so the *only* thing that changes is which
@@ -524,7 +454,7 @@ const AVG_ARTIFACTS_PER_DOMAIN_RUN = 1.065
  * approximation. This is what makes an analytic full-set-switch estimate
  * possible at all: a set bonus is a fixed function of piece count, not a
  * random variable, so it doesn't need sampling — only the substat rolls do
- * (handled separately by `slotDeltaMeanVariance`).
+ * (handled separately by `slotFarmEstimate`).
  *
  * Limitation: only slots that currently have a piece equipped contribute.
  * If fewer than 4-5 slots are filled today, this under-counts the bonus
@@ -588,59 +518,6 @@ function setBonusOnlyDelta(
 }
 
 /**
- * Analytic (non-Monte-Carlo) estimate of fully switching `charKey` into
- * `setKey` across all 5 slots — unlike `estimateArtifactFarmAnalytic`
- * (same-set re-rolls only), this *does* account for the set-bonus
- * activation/loss (via the exact `setBonusOnlyDelta` above), so it's usable
- * for "should I switch sets" comparisons without falling back to the
- * Monte Carlo path. It's still a ballpark for the stat-roll portion (same
- * gradient/Normal-approximation caveats as the same-set estimate), and the
- * `setBonusOnlyDelta` limitation re: empty slots still applies.
- */
-export function estimateArtifactSetSwitchAnalytic(
-  database: ArtCharDatabase,
-  targets: ScoreTarget[],
-  charKey: CharacterKey,
-  setKey: ArtifactSetKey,
-  rarity: ArtifactRarity
-): MonteCarloResult {
-  const gradient = computeCombinedGradient(database, targets, charKey)
-
-  // Stat-level delta, summed (not per-slot positive-clamped) since
-  // switching sets is one holistic commitment, not 5 independent
-  // "keep it if better" decisions.
-  let statMean = 0
-  let statVariance = 0
-  for (const slotKey of allArtifactSlotKeys) {
-    const { mean, variance } = slotDeltaMeanVariance(
-      database,
-      charKey,
-      slotKey,
-      rarity,
-      gradient
-    )
-    statMean += mean
-    statVariance += variance
-  }
-
-  const bonusDelta = setBonusOnlyDelta(database, targets, charKey, setKey)
-  const mean = statMean + bonusDelta
-  const expectedDeltaScore = expectedPositivePart(mean, statVariance)
-
-  // Same cost model as the exact Monte Carlo path: farming each of the 5
-  // slots independently costs its own domain run + leveling.
-  const resinCost =
-    allArtifactSlotKeys.length *
-    (RESIN_COST.artifactDomainRun + resinCostToLevelArtifact(rarity))
-  return {
-    samples: 1, // analytic — no sampling loop
-    expectedDeltaScore,
-    resinCost,
-    efficiency: expectedDeltaScore / resinCost,
-  }
-}
-
-/**
  * Per-slot breakdown of the same two-pass heuristic `slotFarmEstimate`
  * computes — surfaced separately (not just blended into one number) so
  * each piece's contribution can be audited individually.
@@ -659,6 +536,112 @@ export type ArtifactFarmResult = MonteCarloResult & {
 }
 
 /**
+ * Combines the 5 per-slot breakdowns into one result framed as "expected
+ * resin cost to actually land an upgrade" + "how big that upgrade is, given
+ * you land one" — rather than a single blended per-run expectation.
+ *
+ * Each of the 5 slots is equally likely to be where a given drop lands, so
+ * the overall per-drop average/probability is the plain average across
+ * slots. From there:
+ *
+ * - `probUpgradePerRun` = P(a given domain run nets an upgrade in some
+ *   slot) = (target-set artifacts per run) × (average "worth leveling"
+ *   probability). Treating "land an upgrade" as a per-run Bernoulli trial,
+ *   the expected number of runs *until* the first success is the standard
+ *   `1 / probUpgradePerRun` (geometric distribution), so the expected resin
+ *   spent finding it is that many domain runs, plus the leveling cost paid
+ *   exactly once for the piece you actually keep (you don't level the
+ *   discarded attempts along the way — that's the whole point of pass 1/2).
+ * - `averageDamageIncrease` = E[Δ | Δ worth keeping] = the unconditional
+ *   `E[max(Δ,0)]` divided by `P(Δ>0)` — the standard conditional-expectation
+ *   identity, using numbers already computed per slot, not a new estimate.
+ */
+function combineSlotFarmBreakdowns(
+  perSlot: Record<ArtifactSlotKey, SlotFarmBreakdown>,
+  rarity: ArtifactRarity
+): MonteCarloResult {
+  const expectedValuePerDrop =
+    allArtifactSlotKeys.reduce(
+      (sum, slotKey) => sum + perSlot[slotKey].averageDamageChange,
+      0
+    ) / allArtifactSlotKeys.length
+  const probKeepPerDrop =
+    allArtifactSlotKeys.reduce(
+      (sum, slotKey) => sum + perSlot[slotKey].probabilityWorthLeveling,
+      0
+    ) / allArtifactSlotKeys.length
+
+  // Only ~1/ARTIFACT_SETS_PER_DOMAIN of a run's drops are even eligible to
+  // be the set being farmed — the rest are the domain's other set.
+  const avgTargetSetArtifactsPerRun =
+    AVG_ARTIFACTS_PER_DOMAIN_RUN / ARTIFACT_SETS_PER_DOMAIN
+  const probUpgradePerRun = avgTargetSetArtifactsPerRun * probKeepPerDrop
+
+  const expectedRunsToUpgrade =
+    probUpgradePerRun > 0 ? 1 / probUpgradePerRun : Infinity
+  const resinCost =
+    expectedRunsToUpgrade * RESIN_COST.artifactDomainRun +
+    resinCostToLevelArtifact(rarity)
+  const expectedDeltaScore =
+    probKeepPerDrop > 0 ? expectedValuePerDrop / probKeepPerDrop : 0
+
+  return {
+    samples: 1, // analytic — no sampling loop
+    expectedDeltaScore,
+    resinCost,
+    efficiency: resinCost > 0 ? expectedDeltaScore / resinCost : 0,
+  }
+}
+
+/**
+ * Analytic (non-Monte-Carlo) estimate of switching `charKey` into `setKey`
+ * — uses the *exact same* per-run methodology as
+ * `estimateArtifactFarmAnalytic` (two-pass main-stat-gate/substat heuristic
+ * per slot, averaged across the 5 slots, the same two-sets-per-domain drop
+ * rate, and the same leveling-probability-scaled resin cost), with one
+ * addition: the exact set-bonus activation/loss delta (`setBonusOnlyDelta`)
+ * is evenly split across the 5 slots and folded into each slot's pass-1/
+ * pass-2 evaluation. That makes "worth leveling" mean "same or slightly
+ * better than the current set *once the set bonus is accounted for*" —
+ * exactly the threshold this is meant to estimate — rather than assuming
+ * you commit to a full 5-slot switch in one shot regardless of cost.
+ *
+ * Still a ballpark for the stat-roll portion (same gradient/Normal-
+ * approximation caveats as the same-set estimate), and `setBonusOnlyDelta`'s
+ * empty-slot limitation still applies.
+ */
+export function estimateArtifactSetSwitchAnalytic(
+  database: ArtCharDatabase,
+  targets: ScoreTarget[],
+  charKey: CharacterKey,
+  setKey: ArtifactSetKey,
+  rarity: ArtifactRarity
+): ArtifactFarmResult {
+  const gradient = computeCombinedGradient(database, targets, charKey)
+
+  // The set bonus is a joint effect of the whole build's piece count, not
+  // any one slot — splitting it evenly across the 5 slots is an
+  // approximation, but it's what lets each slot's pass-1/pass-2 gate
+  // reflect "is this worth it once the set bonus is factored in."
+  const bonusDelta = setBonusOnlyDelta(database, targets, charKey, setKey)
+  const bonusSharePerSlot = bonusDelta / allArtifactSlotKeys.length
+
+  const perSlot = {} as Record<ArtifactSlotKey, SlotFarmBreakdown>
+  for (const slotKey of allArtifactSlotKeys) {
+    perSlot[slotKey] = slotFarmEstimate(
+      database,
+      charKey,
+      slotKey,
+      rarity,
+      gradient,
+      bonusSharePerSlot
+    )
+  }
+
+  return { ...combineSlotFarmBreakdowns(perSlot, rarity), perSlot }
+}
+
+/**
  * Analytic (non-Monte-Carlo) estimate of running `charKey`'s artifact
  * domain once — you can't selectively farm a single slot in-game, a run
  * drops artifacts across all 5 slots at once, so this combines all 5 into
@@ -667,11 +650,10 @@ export type ArtifactFarmResult = MonteCarloResult & {
  * module doc comment for why this only covers same-set re-rolls; for set
  * switches see `estimateArtifactSetSwitchAnalytic` above.
  *
- * Computed per-slot first (`perSlot`, see `SlotFarmBreakdown`) and then
- * combined into one true average: each of the 5 slots is equally likely to
- * be the one a given drop lands in, so the overall average damage change
- * per drop is the plain average of the 5 slots' individual averages, and
- * the overall "worth leveling" probability likewise.
+ * Computed per-slot first (`perSlot`, see `SlotFarmBreakdown`), then
+ * combined by `combineSlotFarmBreakdowns` into "expected resin to land an
+ * upgrade" + "how big that upgrade is once you land one" — see that
+ * function's doc comment for the conditional-expectation framing.
  */
 export function estimateArtifactFarmAnalytic(
   database: ArtCharDatabase,
@@ -694,36 +676,5 @@ export function estimateArtifactFarmAnalytic(
     )
   }
 
-  // Combine the 5 individually-computed pieces into one true average: each
-  // drop is equally likely to land in any of the 5 slots, so this is a
-  // plain average across them, not a re-derivation.
-  const expectedValuePerDrop =
-    allArtifactSlotKeys.reduce(
-      (sum, slotKey) => sum + perSlot[slotKey].averageDamageChange,
-      0
-    ) / allArtifactSlotKeys.length
-  // Most drops aren't worth leveling at all (you'd judge the rolled
-  // substats and fodder anything mediocre rather than leveling every
-  // single piece), so charging the leveling cost unconditionally on every
-  // drop massively overstates the real expected resin cost of farming —
-  // scale it by the same per-slot "worth leveling" probability.
-  const probKeepPerDrop =
-    allArtifactSlotKeys.reduce(
-      (sum, slotKey) => sum + perSlot[slotKey].probabilityWorthLeveling,
-      0
-    ) / allArtifactSlotKeys.length
-
-  const expectedDeltaScore = AVG_ARTIFACTS_PER_DOMAIN_RUN * expectedValuePerDrop
-  const resinCost =
-    RESIN_COST.artifactDomainRun +
-    AVG_ARTIFACTS_PER_DOMAIN_RUN *
-      probKeepPerDrop *
-      resinCostToLevelArtifact(rarity)
-  return {
-    samples: 1, // analytic — no sampling loop
-    expectedDeltaScore,
-    resinCost,
-    efficiency: expectedDeltaScore / resinCost,
-    perSlot,
-  }
+  return { ...combineSlotFarmBreakdowns(perSlot, rarity), perSlot }
 }
