@@ -1,5 +1,10 @@
 import type { CharacterKey } from '@genshin-optimizer/gi/consts'
-import { useDBMeta } from '@genshin-optimizer/gi/db-ui'
+import {
+  useDatabase,
+  useDBMeta,
+  useOptConfig,
+  useTeamChar,
+} from '@genshin-optimizer/gi/db-ui'
 import { OptimizationTargetSelector } from '@genshin-optimizer/gi/page-team'
 import {
   CharacterName,
@@ -14,15 +19,12 @@ export function CharacterTargetRow({
   teamId,
   teamCharId,
   charKey,
-  optimizationTarget,
-  setOptimizationTarget,
 }: {
   teamId: string
   teamCharId: string
   charKey: CharacterKey
-  optimizationTarget?: string[]
-  setOptimizationTarget: (target: string[]) => void
 }) {
+  const database = useDatabase()
   const { gender } = useDBMeta()
   const teamData = useTeamDataNoContext(teamId, teamCharId)
   const tdc = teamData?.[charKey]
@@ -30,6 +32,8 @@ export function CharacterTargetRow({
     () => (tdc && teamData ? { data: tdc.target, teamData } : undefined),
     [tdc, teamData]
   )
+  const { optConfigId } = useTeamChar(teamCharId)!
+  const { optimizationTarget } = useOptConfig(optConfigId)!
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
       <CharIconSide characterKey={charKey} sideMargin />
@@ -40,7 +44,11 @@ export function CharacterTargetRow({
         <DataContext.Provider value={providerValue}>
           <OptimizationTargetSelector
             optimizationTarget={optimizationTarget}
-            setTarget={setOptimizationTarget}
+            setTarget={(target) =>
+              database.optConfigs.set(optConfigId, {
+                optimizationTarget: target,
+              })
+            }
             buttonProps={{ sx: { flexGrow: 1 } }}
           />
         </DataContext.Provider>

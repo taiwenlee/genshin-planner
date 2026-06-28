@@ -4,10 +4,7 @@ import type { LoadoutDatum } from '@genshin-optimizer/gi/db'
 import { ArtCharDatabase, defaultInitialWeapon } from '@genshin-optimizer/gi/db'
 import { input } from '@genshin-optimizer/gi/wr'
 import { simulateArtifactDomain } from './monteCarlo'
-import {
-  ARTIFACT_CUMULATIVE_EXP_TO_MAX_LEVEL,
-  RESIN_PER_MORA,
-} from './resinCosts'
+import { resinCostToLevelArtifact } from './resinCosts'
 import type { ScoreTarget } from './types'
 
 describe('simulateArtifactDomain', () => {
@@ -49,11 +46,8 @@ describe('simulateArtifactDomain', () => {
     )
     expect(result.samples).toBe(200)
     expect(result.expectedDeltaScore).toBeGreaterThanOrEqual(0)
-    // 20 resin for the domain run + the Mora fee to level a new 5★ piece to max.
-    expect(result.resinCost).toBeCloseTo(
-      20 + ARTIFACT_CUMULATIVE_EXP_TO_MAX_LEVEL[5] * RESIN_PER_MORA,
-      5
-    )
+    // 20 resin for the domain run + the Mora fee (and 4/5 fodder-conversion offset) to level a new 5★ piece to max.
+    expect(result.resinCost).toBeCloseTo(20 + resinCostToLevelArtifact(5), 5)
     expect(result.efficiency).toBeCloseTo(
       result.expectedDeltaScore / result.resinCost,
       10

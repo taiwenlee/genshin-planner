@@ -1,5 +1,6 @@
 export * from './actionEfficiency'
 export * from './aggregate'
+export * from './analyticArtifact'
 export * from './cloneDatabase'
 export * from './materialResinCost'
 export * from './monteCarlo'

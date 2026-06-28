@@ -50,6 +50,11 @@ export type TeamDataBundle = {
 
 function getCharDataBundle(
   database: ArtCharDatabase,
+  // mirrors gi/ui's `useTeamData`'s `useCustom`: when true, the weapon's own
+  // display tree is swapped for the generic per-weapon-type one and the
+  // `custom` multi-target node tree is populated, so a `['custom', i]`
+  // optimization target (picked via the multi-target editor) can resolve.
+  useCustom: boolean,
   mainStatAssumptionLevel: number,
   charInfo: CharInfo,
   weapon: ICachedWeapon,
@@ -61,11 +66,17 @@ function getCharDataBundle(
   const weaponSheet = getWeaponSheet(weapon.key)
   if (!weaponSheet) return undefined
 
-  void displayDataMap[getCharStat(charInfo.key).weaponType]
+  const weaponSheetsDataOfType = displayDataMap[getCharStat(charInfo.key).weaponType]
+  const weaponSheetsData = useCustom
+    ? (() => {
+        const { display, ...restWeaponSheetData } = weaponSheet.data
+        return mergeData([restWeaponSheetData, weaponSheetsDataOfType])
+      })()
+    : weaponSheet.data
 
   const sheetData = mergeData([
     characterSheet.data,
-    weaponSheet.data,
+    weaponSheetsData,
     allArtifactData,
   ])
   const artifactData = artifacts.map((a) =>
@@ -73,7 +84,7 @@ function getCharDataBundle(
   )
   const data = [
     ...artifactData,
-    dataObjForCharacterNew(charInfo, database),
+    dataObjForCharacterNew(charInfo, database, useCustom ? sheetData : undefined),
     dataObjForWeapon(weapon),
     sheetData,
     common, // NEED TO PUT THIS AT THE END
@@ -86,7 +97,10 @@ function getCharDataBundle(
 export function getTeamData(
   database: ArtCharDatabase,
   teamId: string,
-  mainStatAssumptionLevel = 0
+  mainStatAssumptionLevel = 0,
+  // character to build the `custom` multi-target node tree for, if its
+  // selected optimization target is a `['custom', i]` multi-target.
+  useCustomFor?: CharacterKey
 ): TeamDataBundle | undefined {
   const team = database.teams.get(teamId)
   if (!team) return undefined
@@ -122,6 +136,7 @@ export function getTeamData(
 
       return getCharDataBundle(
         database,
+        characterKey === useCustomFor,
         mainLevel,
         {
           key: characterKey,
@@ -160,7 +175,7 @@ export function scoreNodeForTeamMember(
   node: NumNode,
   mainStatAssumptionLevel = 0
 ): number | undefined {
-  const bundle = getTeamData(database, teamId, mainStatAssumptionLevel)
+  const bundle = getTeamData(database, teamId, mainStatAssumptionLevel, charKey)
   if (!bundle) return undefined
   const { teamData } = bundle
   const activeChar = database.teams.getActiveTeamChar(teamId)

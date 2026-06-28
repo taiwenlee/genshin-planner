@@ -16,16 +16,26 @@ export type AggregatedActionEfficiency = {
 }
 
 /**
- * Sums an action's score impact across every team `action.charKey` appears
- * in (`targets`), since leveling/refining/re-gearing a character benefits
- * every team that uses them, but the resin is only spent once.
+ * Sums an action's score impact across every selected target that shares a
+ * team with `action.charKey` (`targets`), not just `action.charKey`'s own
+ * target — a support's level-up/talent/gear can buff a teammate's damage
+ * (team-wide buffs, set bonuses, etc.) at least as much as it changes their
+ * own, and that value would otherwise go uncounted entirely. The resin is
+ * only spent once, but its damage impact is summed across every team the
+ * acting character appears in *and* every teammate's target within those
+ * teams.
  */
 export function aggregateActionAcrossTeams(
   database: ArtCharDatabase,
   targets: ScoreTarget[],
   action: ResinAction
 ): AggregatedActionEfficiency {
-  const relevantTargets = targets.filter((t) => t.charKey === action.charKey)
+  const actingTeamIds = new Set(
+    targets
+      .filter((t) => t.charKey === action.charKey)
+      .map((t) => t.teamId)
+  )
+  const relevantTargets = targets.filter((t) => actingTeamIds.has(t.teamId))
   const perTeam = relevantTargets.map((target) =>
     computeActionEfficiency(database, target, action)
   )

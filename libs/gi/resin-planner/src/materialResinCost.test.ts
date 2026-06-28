@@ -27,7 +27,7 @@ describe('resinCostOfAscensionItems', () => {
     expect(result.low).toBe(result.high)
   })
 
-  test('phase 2+ (4 items, boss mat at index 1) still costs only the Mora fee — the weekly-boss drop table is talent-only, not priced here', () => {
+  test('phase 2+ (4 items, boss mat at index 1) costs Mora + the boss mat, with a range', () => {
     const upgrade = {
       cost: 40000,
       items: [
@@ -38,8 +38,16 @@ describe('resinCostOfAscensionItems', () => {
       ],
     }
     const result = resinCostOfAscensionItems(upgrade)
-    expect(result.low).toBeCloseTo(40000 * RESIN_PER_MORA, 5)
-    expect(result.low).toBe(result.high)
+    const moraCost = 40000 * RESIN_PER_MORA
+    expect(result.low).toBeCloseTo(
+      moraCost + 2 * RESIN_PER_WEEKLY_BOSS_MATERIAL.low,
+      5
+    )
+    expect(result.high).toBeCloseTo(
+      moraCost + 2 * RESIN_PER_WEEKLY_BOSS_MATERIAL.high,
+      5
+    )
+    expect(result.high).toBeGreaterThan(result.low)
   })
 })
 

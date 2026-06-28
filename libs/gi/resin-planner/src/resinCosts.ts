@@ -1,3 +1,5 @@
+import type { ArtifactRarity } from '@genshin-optimizer/gi/consts'
+
 /**
  * In-game resin costs. These are fixed game constants (not derived from the
  * codebase) — see https://genshin-impact.fandom.com/wiki/Resin.
@@ -171,6 +173,28 @@ const MORA_DOMAIN_AVG_YIELD_WL6_PLUS = 60_000
 /** Resin cost per single Mora, at World Level 6+. */
 export const RESIN_PER_MORA =
   RESIN_COST.domainRun / MORA_DOMAIN_AVG_YIELD_WL6_PLUS
+
+/**
+ * Feeding other artifacts to an artifact as EXP fodder only converts at 4/5
+ * (80%) efficiency — to deliver `X` EXP you must consume `X / 0.8` raw
+ * EXP-value worth of fodder artifacts (vs. a hypothetical 100%-efficient
+ * dedicated EXP material, which isn't free either and isn't modeled here).
+ * That extra 25% isn't optional overhead you can skip — it's priced in
+ * below via `resinCostToLevelArtifact`.
+ */
+export const ARTIFACT_FODDER_CONVERSION_RATE = 4 / 5
+
+/**
+ * Total resin cost to level a newly-dropped artifact of `rarity` to max:
+ * the Mora cost (1 Mora per EXP point, converted to resin via
+ * `RESIN_PER_MORA`) of the EXP actually needed, inflated by the 4/5 fodder
+ * conversion loss above.
+ */
+export function resinCostToLevelArtifact(rarity: ArtifactRarity): number {
+  const effectiveExpNeeded =
+    ARTIFACT_CUMULATIVE_EXP_TO_MAX_LEVEL[rarity] / ARTIFACT_FODDER_CONVERSION_RATE
+  return effectiveExpNeeded * RESIN_PER_MORA
+}
 
 /**
  * Level-range boundaries used by both the character- and weapon-leveling

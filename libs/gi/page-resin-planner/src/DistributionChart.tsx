@@ -17,7 +17,7 @@ import {
 import { resolveTargetNode } from './resolveTargetNode'
 import type { TargetSelectionState } from './types'
 
-/** Stacked per-character DPS breakdown for every selected team, using the same `scoreNodeForTeamMember` the action-efficiency ranking uses. */
+/** Stacked per-character damage breakdown for every selected team, using the same `scoreNodeForTeamMember` the action-efficiency ranking uses. */
 export function DistributionChart({
   selectedTeamIds,
   targets,

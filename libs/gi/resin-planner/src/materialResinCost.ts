@@ -47,16 +47,24 @@ function flat(value: number): ResinCostRange {
  */
 
 /**
- * Ascension's boss-mat slot (items[1] when present, phases 2-6) isn't priced
- * here — the weekly-boss drop-rate table only covers the talent boss-mat
- * slot (see `resinCostOfTalentItems`), not ascension's. Only the Mora fee
- * is counted until ascension's own boss-mat resin cost is known.
+ * Ascension phases 2-6 need a weekly-boss material (`items[1]`, per the
+ * `[gem, bossMat, localSpecialty, commonDrop]` layout described above);
+ * phase 1 has no boss-mat slot (`[gem, localSpecialty, commonDrop]`, length
+ * 3). Priced via the same `RESIN_PER_WEEKLY_BOSS_MATERIAL` rate
+ * `resinCostOfTalentItems` uses for the talent boss-mat slot — same
+ * material pool, same Trounce Domain low/high kill-cost tiers.
  */
 export function resinCostOfAscensionItems(upgrade: {
   cost: number
   items: ReadonlyArray<{ item: string; amount: number }>
 }): ResinCostRange {
-  return flat(upgrade.cost * RESIN_PER_MORA)
+  const moraCost = upgrade.cost * RESIN_PER_MORA
+  if (upgrade.items.length < 4) return flat(moraCost)
+  const bossMatAmount = upgrade.items[1]!.amount
+  return {
+    low: moraCost + bossMatAmount * RESIN_PER_WEEKLY_BOSS_MATERIAL.low,
+    high: moraCost + bossMatAmount * RESIN_PER_WEEKLY_BOSS_MATERIAL.high,
+  }
 }
 
 /** Talent level -> book rarity. Standardized across every character: level 2 needs 2★ Teachings, 3-6 need 3★ Guide, 7-10 need 4★ Philosophies. */

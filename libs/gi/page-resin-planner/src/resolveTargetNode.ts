@@ -20,7 +20,12 @@ export function resolveTargetNode(
   optimizationTarget: string[],
   mainStatAssumptionLevel = 0
 ): NumNode | undefined {
-  const bundle = getTeamData(database, teamId, mainStatAssumptionLevel)
+  const bundle = getTeamData(
+    database,
+    teamId,
+    mainStatAssumptionLevel,
+    charKey
+  )
   if (!bundle) return undefined
   const activeChar = database.teams.getActiveTeamChar(teamId)
   if (!activeChar) return undefined
