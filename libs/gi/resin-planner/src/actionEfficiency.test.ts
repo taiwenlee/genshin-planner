@@ -288,7 +288,11 @@ describe('aggregateActionsForCharacter', () => {
       node: input.total.atk,
     }
     const levelBefore = database.chars.get('Bennett')!.level
-    const action: ResinAction = { kind: 'levelUp', charKey: 'Bennett', levels: 10 }
+    const action: ResinAction = {
+      kind: 'levelUp',
+      charKey: 'Bennett',
+      levels: 10,
+    }
     const deltaWithBaseline = (b: number) =>
       aggregateActionsForCharacter(
         database,
@@ -301,7 +305,10 @@ describe('aggregateActionsForCharacter', () => {
     // The after-score is fixed, so raising the injected baseline by 100 must
     // lower the reported delta by exactly 100 — proving the supplied baseline
     // is used verbatim rather than re-scored.
-    expect(deltaWithBaseline(1000) - deltaWithBaseline(1100)).toBeCloseTo(100, 5)
+    expect(deltaWithBaseline(1000) - deltaWithBaseline(1100)).toBeCloseTo(
+      100,
+      5
+    )
     expect(database.chars.get('Bennett')!.level).toBe(levelBefore)
   })
 })
