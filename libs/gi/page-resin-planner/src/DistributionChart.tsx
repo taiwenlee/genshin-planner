@@ -99,7 +99,13 @@ export function DistributionChart({
           <XAxis dataKey="name" />
           <YAxis />
           <Tooltip />
-          <Legend />
+          {/* Explicit height is required: a bare <Legend> measures its own
+              bbox in componentDidMount and feeds it back into the chart's
+              layout state, which — when the chart's width also shifts (e.g. a
+              page scrollbar appearing as this card mounts) — oscillates and
+              trips React's nested-update limit (error #185). A fixed legend
+              allocation breaks that feedback loop. */}
+          <Legend height={36} />
           {charKeys.map((charKey) => {
             const ele = getCharEle(charKey)
             const color = ele
