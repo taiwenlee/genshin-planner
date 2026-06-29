@@ -7,8 +7,11 @@ import type { LoadoutDatum } from '@genshin-optimizer/gi/db'
 import { ArtCharDatabase, defaultInitialWeapon } from '@genshin-optimizer/gi/db'
 import { input } from '@genshin-optimizer/gi/wr'
 import { computeActionEfficiency } from './actionEfficiency'
-import { aggregateActionAcrossTeams } from './aggregate'
-import type { ScoreTarget } from './types'
+import {
+  aggregateActionAcrossTeams,
+  aggregateActionsForCharacter,
+} from './aggregate'
+import type { ResinAction, ScoreTarget } from './types'
 
 function setupSoloTeam(database: ArtCharDatabase) {
   database.chars.set('Bennett', {
@@ -232,5 +235,73 @@ describe('aggregateActionAcrossTeams', () => {
       aggregated.totalDeltaScore / aggregated.resinCost,
       5
     )
+  })
+})
+
+describe('aggregateActionsForCharacter', () => {
+  test('matches per-action aggregateActionAcrossTeams (the clone-reuse + revert path must be numerically identical)', () => {
+    const database = new ArtCharDatabase(1, new SandboxStorage())
+    const { teamId } = setupSoloTeam(database)
+    database.weapons.set(database.chars.get('Bennett')!.equippedWeapon, {
+      key: 'AquilaFavonia',
+      level: 1,
+      refinement: 1,
+    })
+    const targets: ScoreTarget[] = [
+      { teamId, charKey: 'Bennett', node: input.total.atk },
+    ]
+    // A mix that mutates the character (level/talent) and the weapon
+    // (level/refine) — exercising that the snapshot revert fully resets both
+    // records between actions so each action's delta is measured in isolation.
+    const actions: ResinAction[] = [
+      { kind: 'levelUp', charKey: 'Bennett', levels: 10 },
+      { kind: 'talentLevelUp', charKey: 'Bennett', talent: 'auto', levels: 1 },
+      { kind: 'weaponLevelUp', charKey: 'Bennett', levels: 10 },
+      { kind: 'weaponRefine', charKey: 'Bennett', refines: 1 },
+    ]
+
+    const batched = aggregateActionsForCharacter(
+      database,
+      targets,
+      'Bennett',
+      actions
+    )
+    expect(batched).toHaveLength(actions.length)
+    actions.forEach((action, i) => {
+      const expected = aggregateActionAcrossTeams(database, targets, action)
+      expect(batched[i]!.totalDeltaScore).toBeCloseTo(
+        expected.totalDeltaScore,
+        5
+      )
+      expect(batched[i]!.resinCost).toBe(expected.resinCost)
+      expect(batched[i]!.resinCostHigh).toBe(expected.resinCostHigh)
+      expect(batched[i]!.efficiency).toBeCloseTo(expected.efficiency, 5)
+    })
+  })
+
+  test('reuses a caller-supplied baseline and leaves the database unmutated', () => {
+    const database = new ArtCharDatabase(1, new SandboxStorage())
+    const { teamId } = setupSoloTeam(database)
+    const target: ScoreTarget = {
+      teamId,
+      charKey: 'Bennett',
+      node: input.total.atk,
+    }
+    const levelBefore = database.chars.get('Bennett')!.level
+    const action: ResinAction = { kind: 'levelUp', charKey: 'Bennett', levels: 10 }
+    const deltaWithBaseline = (b: number) =>
+      aggregateActionsForCharacter(
+        database,
+        [target],
+        'Bennett',
+        [action],
+        new Map<ScoreTarget, number>([[target, b]])
+      )[0]!.totalDeltaScore
+
+    // The after-score is fixed, so raising the injected baseline by 100 must
+    // lower the reported delta by exactly 100 — proving the supplied baseline
+    // is used verbatim rather than re-scored.
+    expect(deltaWithBaseline(1000) - deltaWithBaseline(1100)).toBeCloseTo(100, 5)
+    expect(database.chars.get('Bennett')!.level).toBe(levelBefore)
   })
 })

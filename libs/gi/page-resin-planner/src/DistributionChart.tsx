@@ -26,13 +26,21 @@ export function DistributionChart({
   targets: TargetSelectionState
 }) {
   const database = useDatabase()
-  // Re-render the chart when any underlying char/team/teamChar data changes.
-  useDataManagerValues(database.teams)
-  useDataManagerValues(database.teamChars)
-  useDataManagerValues(database.chars)
+  // Capture (not just subscribe to) every manager the score depends on, so
+  // the `data` memo below both recomputes when any of them changes (e.g.
+  // leveling a weapon or swapping an artifact) and — crucially — *doesn't*
+  // recompute the expensive per-team scoring on unrelated re-renders.
+  const teamsValues = useDataManagerValues(database.teams)
+  const teamCharsValues = useDataManagerValues(database.teamChars)
+  const charsValues = useDataManagerValues(database.chars)
+  const weaponsValues = useDataManagerValues(database.weapons)
+  const artsValues = useDataManagerValues(database.arts)
   const theme = useTheme()
 
-  const entries = Object.values(targets).filter((e) => e.optimizationTarget)
+  const entries = useMemo(
+    () => Object.values(targets).filter((e) => e.optimizationTarget),
+    [targets]
+  )
 
   const charKeys = useMemo(
     () => Array.from(new Set(entries.map((e) => e.charKey))),
@@ -62,7 +70,17 @@ export function DistributionChart({
         }
         return row
       }),
-    [selectedTeamIds, entries, database]
+    // The *Values deps make this recompute on any underlying gear/level change.
+    [
+      selectedTeamIds,
+      entries,
+      database,
+      teamsValues,
+      teamCharsValues,
+      charsValues,
+      weaponsValues,
+      artsValues,
+    ]
   )
 
   if (!selectedTeamIds.length || !charKeys.length)

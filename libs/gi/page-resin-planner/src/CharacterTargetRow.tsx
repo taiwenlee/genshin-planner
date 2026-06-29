@@ -14,6 +14,7 @@ import {
 } from '@genshin-optimizer/gi/ui'
 import { Box } from '@mui/material'
 import { useMemo } from 'react'
+import { CharacterInfoTooltip } from './CharacterInfoTooltip'
 
 export function CharacterTargetRow({
   teamId,
@@ -36,10 +37,16 @@ export function CharacterTargetRow({
   const { optimizationTarget } = useOptConfig(optConfigId)!
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-      <CharIconSide characterKey={charKey} sideMargin />
-      <Box sx={{ minWidth: '8em' }}>
-        <CharacterName characterKey={charKey} gender={gender} />
-      </Box>
+      <CharacterInfoTooltip charKey={charKey}>
+        <Box
+          sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'help' }}
+        >
+          <CharIconSide characterKey={charKey} sideMargin />
+          <Box sx={{ minWidth: '8em' }}>
+            <CharacterName characterKey={charKey} gender={gender} />
+          </Box>
+        </Box>
+      </CharacterInfoTooltip>
       {providerValue ? (
         <DataContext.Provider value={providerValue}>
           <OptimizationTargetSelector

@@ -111,6 +111,23 @@ const SUBSTAT_WEIGHTS: Record<SubstatKey, number> = {
   critDMG_: 3,
 }
 
+/**
+ * Main-stat value in the same percent-number scale the gradient and substat
+ * values use (e.g. 46.6 for a 46.6% ATK sands, not the raw 0.466
+ * `getMainStatValue` returns for `_`-suffixed stats). Both the old equipped
+ * piece and a candidate drop must go through this — comparing one in
+ * percent-number scale against the other in raw decimal makes the
+ * difference off by ~100x.
+ */
+function mainStatPercentValue(
+  mainKey: MainStatKey,
+  rarity: ArtifactRarity,
+  level: number
+): number {
+  const raw = getMainStatValue(mainKey, rarity, level)
+  return mainKey.endsWith('_') ? toPercent(raw, mainKey) : raw
+}
+
 function mainStatProbability(
   slotKey: ArtifactSlotKey,
   mainKey: MainStatKey
@@ -145,6 +162,27 @@ function expectedPositivePart(mean: number, variance: number): number {
   const sigma = Math.sqrt(variance)
   const z = mean / sigma
   return sigma * normalPdf(z) + mean * normalCdf(z)
+}
+
+/**
+ * `E[min(max(Δ,0), cap)]` for `Δ ~ Normal(mean, variance)`: the expected
+ * positive part, but with the upside truncated at `cap` — the most a single
+ * fresh piece could actually deliver. A bull-call-spread identity:
+ * `max(Δ,0) − max(Δ−cap,0) = min(max(Δ,0), cap)`. This subtracts the slice
+ * of the Normal's *unbounded* upper tail that sits beyond a value the real,
+ * hard-capped roll distribution can never reach — the tail that otherwise
+ * over-credited impossible rolls in `E[max(Δ,0)]`.
+ */
+function cappedExpectedPositivePart(
+  mean: number,
+  variance: number,
+  cap: number
+): number {
+  if (cap <= 0) return 0
+  return (
+    expectedPositivePart(mean, variance) -
+    expectedPositivePart(mean - cap, variance)
+  )
 }
 
 /** P(X > 0) for a Normal(mean, variance) variable — how likely a random drop is actually worth leveling, not just its expected value if kept. */
@@ -198,6 +236,11 @@ const GRADIENT_PROBE = 100
  */
 function computeGradientForWearer(
   database: ArtCharDatabase,
+  // A reusable clone of `database`; this function leaves it in its original
+  // state on return (it restores the probed `bonusStats`), so one clone can
+  // be shared across every target instead of paying a full inventory
+  // export/import round-trip per target.
+  mutated: ArtCharDatabase,
   wearerCharKey: CharacterKey,
   scoreTarget: ScoreTarget,
   baseline: number
@@ -207,7 +250,6 @@ function computeGradientForWearer(
   if (!teamCharId) return gradient
   const teamChar = database.teamChars.get(teamCharId)
   const originalBonusStats = teamChar?.bonusStats ?? {}
-  const mutated = cloneDatabase(database)
   for (const key of allMainSubStatKeys) {
     mutated.teamChars.set(teamCharId, {
       bonusStats: {
@@ -225,6 +267,8 @@ function computeGradientForWearer(
       ) ?? 0
     gradient[key] = (bumped - baseline) / GRADIENT_PROBE
   }
+  // Leave the shared clone pristine for the next target.
+  mutated.teamChars.set(teamCharId, { bonusStats: originalBonusStats })
   return gradient
 }
 
@@ -244,6 +288,9 @@ function computeCombinedGradient(
 ): Partial<Record<MainSubStatKey, number>> {
   const relevantTargets = relevantTargetsForWearer(targets, charKey)
   const combined: Partial<Record<MainSubStatKey, number>> = {}
+  // One clone shared across every target's probes; computeGradientForWearer
+  // restores it to pristine state after each use.
+  const mutated = cloneDatabase(database)
   for (const target of relevantTargets) {
     const baseline =
       scoreNodeForTeamMember(
@@ -255,6 +302,7 @@ function computeCombinedGradient(
       ) ?? 0
     const gradient = computeGradientForWearer(
       database,
+      mutated,
       charKey,
       target,
       baseline
@@ -281,9 +329,21 @@ function expectedTotalRolls(rarity: ArtifactRarity): number {
  * total rolls), under the approximation that initial-substat inclusion
  * probability for k is `4*w_k/W` (Horvitz-Thompson-style weighted sampling
  * without replacement) and upgrade rolls then split evenly across whichever
- * 4 keys got picked. `Var(rolls on k)` uses the matching Binomial(R, w_k/W)
- * approximation. Both ignore the small negative covariance between keys
- * from drawing without replacement — fine for a ballpark.
+ * 4 keys got picked.
+ *
+ * The variance decomposes via the law of total variance over the roll
+ * *counts* `N = (N_1..N_K)`, with each roll's value `V_k` random
+ * (`mean μ_k`, `var σ²_k`) and `a_k = g_k·μ_k` the expected score per roll
+ * landing on key k:
+ *   Var = Σ_k g_k²·E[N_k]·σ²_k           (within-key value spread)
+ *       + R·(Σ_k a_k²·p_k − (Σ_k a_k·p_k)²)   (which-key spread)
+ * The which-key term is the *exact* multinomial `Var(Σ a_k N_k)` — the
+ * counts are negatively correlated (a roll on one key is a roll not on
+ * another), so this is strictly smaller than the old per-key
+ * `Binomial(R, p_k)` sum, which double-counted variance for same-sign
+ * gradients (e.g. crit rate + crit DMG) and inflated the upside
+ * `E[max(Δ,0)]`. Calibration against the Monte Carlo path showed exactly
+ * that over-estimate; this is the principled fix.
  */
 function substatMeanVariance(
   excludedKey: MainSubStatKey | undefined,
@@ -295,13 +355,13 @@ function substatMeanVariance(
   const r = expectedTotalRolls(rarity)
 
   let mean = 0
-  let variance = 0
+  let withinKeyVar = 0 // Σ g_k²·E[N_k]·σ²_k
+  let sumA2p = 0 // Σ a_k²·p_k
+  let sumAp = 0 // Σ a_k·p_k
   for (const key of pool) {
     const g = gradient[key] ?? 0
     if (!g) continue
     const p = SUBSTAT_WEIGHTS[key] / totalWeight
-    const expectedRolls = r * p
-    const varRolls = r * p * (1 - p)
 
     const possibleValues = getSubstatValuesPercent(key, rarity)
     const meanValue =
@@ -310,14 +370,46 @@ function substatMeanVariance(
       possibleValues.reduce((a, b) => a + (b - meanValue) ** 2, 0) /
       possibleValues.length
 
-    const meanTotal = expectedRolls * meanValue
-    // Var of a randomly-stopped sum: Var(S) = E[N]Var(X) + Var(N)E[X]^2.
-    const varTotal = expectedRolls * varValue + varRolls * meanValue ** 2
-
-    mean += g * meanTotal
-    variance += g * g * varTotal
+    const a = g * meanValue // expected score per roll landing on this key
+    mean += r * p * a
+    withinKeyVar += g * g * (r * p) * varValue
+    sumA2p += a * a * p
+    sumAp += a * p
   }
-  return { mean, variance }
+  // Exact multinomial Var(Σ a_k N_k), not a sum of independent Binomials.
+  const whichKeyVar = r * (sumA2p - sumAp * sumAp)
+  return { mean, variance: withinKeyVar + whichKeyVar }
+}
+
+/**
+ * Upper bound on the substat-only score a single fresh artifact can possibly
+ * deliver in this slot: its 4 initial substats are the 4 highest-value keys
+ * (by gradient × that key's best single roll), and every one of the upgrade
+ * rolls lands on the single best of those. This is the true maximum of the
+ * substat-score support — used to cap the Normal approximation's *unbounded*
+ * upper tail at a value the real (hard-capped) roll distribution can't exceed.
+ */
+function maxSubstatContribution(
+  rarity: ArtifactRarity,
+  gradient: Partial<Record<MainSubStatKey, number>>,
+  excludedKey: MainSubStatKey | undefined
+): number {
+  const { high: initialSubstats, numUpgrades } = artSubstatRollData[rarity]
+  const perKeyBest = allSubstatKeys
+    .filter((k) => k !== excludedKey)
+    .map(
+      (k) =>
+        (gradient[k] ?? 0) * Math.max(...getSubstatValuesPercent(k, rarity))
+    )
+    .filter((v) => v > 0)
+    .sort((a, b) => b - a)
+  if (!perKeyBest.length) return 0
+  // 4 initial substats = the top-4 keys; all upgrades pile onto the best one.
+  const fromInitial = perKeyBest
+    .slice(0, initialSubstats)
+    .reduce((a, b) => a + b, 0)
+  const fromUpgrades = numUpgrades * perKeyBest[0]
+  return fromInitial + fromUpgrades
 }
 
 /**
@@ -361,7 +453,7 @@ function slotFarmEstimate(
 
   const oldMainContribution = oldArt
     ? (gradient[oldArt.mainStatKey] ?? 0) *
-      getMainStatValue(oldArt.mainStatKey, oldArt.rarity, oldArt.level)
+      mainStatPercentValue(oldArt.mainStatKey, oldArt.rarity, oldArt.level)
     : 0
   let oldSubstatContribution = 0
   if (oldArt)
@@ -377,41 +469,47 @@ function slotFarmEstimate(
   for (const mainKey of mainCandidates) {
     const probability = mainStatProbability(slotKey, mainKey)
     if (!probability) continue
-    const raw = getMainStatValue(mainKey, rarity, maxLevel)
-    const value = mainKey.endsWith('_') ? toPercent(raw, mainKey) : raw
+    const value = mainStatPercentValue(mainKey, rarity, maxLevel)
     const ownContribution = (gradient[mainKey] ?? 0) * value
     const mainDelta = ownContribution - oldMainContribution + extraOffset
 
-    // Pass 1: strictly worse main stat — fodder on sight, substats don't
-    // matter. A *tie* (mainDelta === 0, e.g. the same already-optimal main
-    // stat type/value you're already running) must still fall through to
-    // pass 2 — "same main, possibly better substats" is the single most
-    // realistic and valuable outcome once you're already on the right main
-    // stat, so excluding it here would zero out nearly every drop for an
-    // already-well-built character. But a tie only counts if the stat
-    // itself has real value (`ownContribution > 0`) — otherwise "tied at
-    // zero" just means two equally-irrelevant stats (e.g. HP%/DEF%/ER% on
-    // a kit that doesn't use them), not "tied at good," and would
-    // otherwise slip through whenever the currently-equipped main happens
-    // to also be irrelevant. `extraOffset` (a set-bonus share) can still
-    // tip an otherwise-losing main stat into "worth it," which is correct.
-    if (mainDelta < 0 || ownContribution <= 0) continue
+    // Pass 1: skip only a *strictly worse* main stat (`mainDelta < 0`) —
+    // fodder on sight, no substat roll could save it. Everything else,
+    // including a tie, falls through to pass 2 to have its substats judged.
+    //
+    // The gate is deliberately on `mainDelta` (new-vs-equipped, set-bonus
+    // `extraOffset` included), NOT on the main stat's absolute relevance
+    // (`ownContribution`). A piece whose main stat is irrelevant to the
+    // target is NOT automatically fodder: a slot with a fixed main stat
+    // (flower's flat HP, plume's flat ATK) — or any same-main re-roll — is a
+    // pure *substat* upgrade decision, and its substats can be a large gain
+    // even when the main does nothing. Gating on `ownContribution <= 0` here
+    // wrongly zeroed those out entirely (e.g. every crit DPS's flower).
+    // Letting them through doesn't over-count: if the substats are also
+    // irrelevant, `totalMean ≈ 0` and pass 2 contributes ~0 on its own.
+    if (mainDelta < 0) continue
     probabilityRightMainStat += probability
 
     // Pass 2: right main stat — evaluate the substat roll probabilistically.
     const excludesSubstat = (allSubstatKeys as readonly string[]).includes(
       mainKey
     )
+    const excludedKey = excludesSubstat ? mainKey : undefined
     const { mean: substatMean, variance: substatVariance } =
-      substatMeanVariance(
-        excludesSubstat ? mainKey : undefined,
-        rarity,
-        gradient
-      )
+      substatMeanVariance(excludedKey, rarity, gradient)
     const totalMean = mainDelta + substatMean - oldSubstatContribution
 
+    // The largest possible Δ for this branch: best-case main (already fixed
+    // here) plus the best-case substats, minus what's equipped. Cap the
+    // Normal tail there so impossible rolls can't inflate the expected gain.
+    const maxDelta =
+      mainDelta +
+      maxSubstatContribution(rarity, gradient, excludedKey) -
+      oldSubstatContribution
+
     averageDamageChange +=
-      probability * expectedPositivePart(totalMean, substatVariance)
+      probability *
+      cappedExpectedPositivePart(totalMean, substatVariance, maxDelta)
     probabilityWorthLeveling +=
       probability * probabilityPositive(totalMean, substatVariance)
   }
@@ -444,6 +542,42 @@ const AVG_ARTIFACTS_PER_DOMAIN_RUN = 1.065
  * domain's other set and contributes nothing toward `slotKey`/`setKey`.
  */
 const ARTIFACT_SETS_PER_DOMAIN = 2
+
+/**
+ * Relabels every currently-equipped piece on `clone` to `setKey`, freezing
+ * each piece's main stat, substats, and level — so the only thing that
+ * changes is which set bonuses are active. The building block for evaluating
+ * "same pieces, different set".
+ */
+function relabelEquippedToSet(
+  clone: ArtCharDatabase,
+  database: ArtCharDatabase,
+  charKey: CharacterKey,
+  setKey: ArtifactSetKey
+): void {
+  const char = database.chars.get(charKey)
+  if (!char) return
+  for (const slotKey of allArtifactSlotKeys) {
+    const artId = char.equippedArtifacts[slotKey]
+    const art = artId ? database.arts.get(artId) : undefined
+    if (!art) continue
+    applyAction(clone, {
+      kind: 'artifactSwap',
+      charKey,
+      slotKey,
+      newArtifact: {
+        setKey,
+        rarity: art.rarity,
+        slotKey: art.slotKey,
+        mainStatKey: art.mainStatKey,
+        level: art.level,
+        substats: art.substats,
+        location: art.location,
+        lock: false,
+      },
+    })
+  }
+}
 
 /**
  * Exact (not estimated) score delta from a set-bonus threshold change
@@ -483,26 +617,7 @@ function setBonusOnlyDelta(
   )
 
   const mutated = cloneDatabase(database)
-  for (const slotKey of allArtifactSlotKeys) {
-    const artId = char.equippedArtifacts[slotKey]
-    const art = artId ? database.arts.get(artId) : undefined
-    if (!art) continue
-    applyAction(mutated, {
-      kind: 'artifactSwap',
-      charKey,
-      slotKey,
-      newArtifact: {
-        setKey,
-        rarity: art.rarity,
-        slotKey: art.slotKey,
-        mainStatKey: art.mainStatKey,
-        level: art.level,
-        substats: art.substats,
-        location: art.location,
-        lock: false,
-      },
-    })
-  }
+  relabelEquippedToSet(mutated, database, charKey, setKey)
 
   return relevantTargets.reduce((sum, t, idx) => {
     const after =
@@ -594,21 +709,186 @@ function combineSlotFarmBreakdowns(
 }
 
 /**
- * Analytic (non-Monte-Carlo) estimate of switching `charKey` into `setKey`
- * — uses the *exact same* per-run methodology as
- * `estimateArtifactFarmAnalytic` (two-pass main-stat-gate/substat heuristic
- * per slot, averaged across the 5 slots, the same two-sets-per-domain drop
- * rate, and the same leveling-probability-scaled resin cost), with one
- * addition: the exact set-bonus activation/loss delta (`setBonusOnlyDelta`)
- * is evenly split across the 5 slots and folded into each slot's pass-1/
- * pass-2 evaluation. That makes "worth leveling" mean "same or slightly
- * better than the current set *once the set bonus is accounted for*" —
- * exactly the threshold this is meant to estimate — rather than assuming
- * you commit to a full 5-slot switch in one shot regardless of cost.
+ * Resin to farm a full set of `charKey`'s *current* main stats in a new set
+ * — the real cost of a set switch, dominated by collecting 5 correct-slot,
+ * correct-main-stat pieces. (Re-rolling substats back to parity is a
+ * separate, open-ended grind that isn't required to *realize* the set-bonus
+ * gain, so it isn't charged here.) Per slot, expected target-set drops with
+ * the right main per run = (target-set drops per run) × (this slot's 1/5
+ * share) × P(main); `1/that` is the expected runs. Summed across slots — a
+ * deliberately conservative upper bound, since real runs collect several
+ * slots at once — plus leveling all five.
+ */
+function fullSetAcquisitionResin(
+  database: ArtCharDatabase,
+  charKey: CharacterKey,
+  rarity: ArtifactRarity
+): number {
+  const char = database.chars.get(charKey)
+  const avgTargetSetPerRun =
+    AVG_ARTIFACTS_PER_DOMAIN_RUN / ARTIFACT_SETS_PER_DOMAIN
+  let runs = 0
+  for (const slotKey of allArtifactSlotKeys) {
+    const artId = char?.equippedArtifacts[slotKey]
+    const oldArt = artId ? database.arts.get(artId) : undefined
+    const mainKey = oldArt?.mainStatKey ?? artSlotMainKeys[slotKey][0]
+    const perRun =
+      avgTargetSetPerRun *
+      (1 / allArtifactSlotKeys.length) *
+      mainStatProbability(slotKey, mainKey)
+    if (perRun > 0) runs += 1 / perRun
+  }
+  return (
+    runs * RESIN_COST.artifactDomainRun +
+    allArtifactSlotKeys.length * resinCostToLevelArtifact(rarity)
+  )
+}
+
+/** Mean value of a single roll of substat `key`. */
+function meanRollValue(key: SubstatKey, rarity: ArtifactRarity): number {
+  const values = getSubstatValuesPercent(key, rarity)
+  return values.reduce((a, b) => a + b, 0) / values.length
+}
+
+/**
+ * The character's current substat investment as roll *counts* per key
+ * (set-independent — leveling a piece to +20 yields the same roll count
+ * regardless of set), plus how many pieces use each main stat (a substat
+ * can't appear on a slot whose main stat it is, which limits how many rolls
+ * of it a build can hold). This fixed roll budget is what both the current
+ * and candidate set are compared at — "same amount of roll value".
+ */
+function substatRollProfile(
+  database: ArtCharDatabase,
+  charKey: CharacterKey
+): {
+  rollsPerKey: Partial<Record<SubstatKey, number>>
+  mainCounts: Partial<Record<MainStatKey, number>>
+  totalRolls: number
+} {
+  const char = database.chars.get(charKey)
+  const rollsPerKey: Partial<Record<SubstatKey, number>> = {}
+  const mainCounts: Partial<Record<MainStatKey, number>> = {}
+  let totalRolls = 0
+  for (const slotKey of allArtifactSlotKeys) {
+    const artId = char?.equippedArtifacts[slotKey]
+    const art = artId ? database.arts.get(artId) : undefined
+    if (!art) continue
+    mainCounts[art.mainStatKey] = (mainCounts[art.mainStatKey] ?? 0) + 1
+    for (const sub of art.substats) {
+      if (!sub.key) continue
+      const rolls = sub.rolls?.length ?? 0
+      rollsPerKey[sub.key] = (rollsPerKey[sub.key] ?? 0) + rolls
+      totalRolls += rolls
+    }
+  }
+  return { rollsPerKey, mainCounts, totalRolls }
+}
+
+/**
+ * Best substat score achievable by allocating `budget` rolls under
+ * `gradient`: greedily fills the highest value-per-roll (`gradient × mean
+ * roll`) substats first, each capped at how many rolls a build can actually
+ * hold for that key (slots where it isn't the main × `1 + numUpgrades`).
+ * Valued at mean rolls, so it's directly comparable to `currentSubstatScore`.
+ */
+function optimalSubstatScore(
+  gradient: Partial<Record<MainSubStatKey, number>>,
+  budget: number,
+  mainCounts: Partial<Record<MainStatKey, number>>,
+  rarity: ArtifactRarity
+): number {
+  const maxRollsPerInstance = 1 + artSubstatRollData[rarity].numUpgrades
+  const candidates = allSubstatKeys
+    .map((key) => {
+      const valuePerRoll = (gradient[key] ?? 0) * meanRollValue(key, rarity)
+      const slotsAvailable =
+        allArtifactSlotKeys.length - (mainCounts[key as MainStatKey] ?? 0)
+      return {
+        valuePerRoll,
+        cap: Math.max(0, slotsAvailable) * maxRollsPerInstance,
+      }
+    })
+    .filter((c) => c.valuePerRoll > 0)
+    .sort((a, b) => b.valuePerRoll - a.valuePerRoll)
+
+  let remaining = budget
+  let score = 0
+  for (const { valuePerRoll, cap } of candidates) {
+    if (remaining <= 0) break
+    const take = Math.min(remaining, cap)
+    score += take * valuePerRoll
+    remaining -= take
+  }
+  return score
+}
+
+/** Current substats valued under `gradient`, at mean roll values (same units as `optimalSubstatScore`). */
+function currentSubstatScore(
+  gradient: Partial<Record<MainSubStatKey, number>>,
+  rollsPerKey: Partial<Record<SubstatKey, number>>,
+  rarity: ArtifactRarity
+): number {
+  let score = 0
+  for (const key of allSubstatKeys) {
+    const rolls = rollsPerKey[key] ?? 0
+    if (rolls)
+      score += (gradient[key] ?? 0) * rolls * meanRollValue(key, rarity)
+  }
+  return score
+}
+
+/**
+ * How much better an *optimally* re-allocated substat budget would score than
+ * the current allocation, under `gradient` (≥ 0). This is the "different sets
+ * want different substats" term: a set whose gradient ranks substats
+ * differently (e.g. one that grants crit, lowering crit's marginal value and
+ * raising ATK%/EM's) has a different optimal allocation, so re-spending the
+ * same roll budget its way is worth a different amount.
+ */
+function reallocationGain(
+  gradient: Partial<Record<MainSubStatKey, number>>,
+  profile: ReturnType<typeof substatRollProfile>,
+  rarity: ArtifactRarity
+): number {
+  return (
+    optimalSubstatScore(
+      gradient,
+      profile.totalRolls,
+      profile.mainCounts,
+      rarity
+    ) - currentSubstatScore(gradient, profile.rollsPerKey, rarity)
+  )
+}
+
+/**
+ * Analytic estimate of switching `charKey` into `setKey`, comparing the two
+ * sets at **equal roll value** rather than at literally-identical substats.
  *
- * Still a ballpark for the stat-roll portion (same gradient/Normal-
- * approximation caveats as the same-set estimate), and `setBonusOnlyDelta`'s
- * empty-slot limitation still applies.
+ * The headline damage has two parts:
+ *
+ *  1. `setBonusOnlyDelta` — the deterministic gain from the set bonus alone,
+ *     with every equipped piece relabeled to `setKey` (same substats). This
+ *     is the "Finale would be ~+2%" number, reported directly instead of
+ *     buried in a stochastic substat-re-roll heuristic that collapses to ~0
+ *     for an already-well-built character.
+ *
+ *  2. An equal-roll-value re-allocation adjustment,
+ *     `reallocationGain(newSet) − reallocationGain(currentSet)`. Different
+ *     sets want different substats, so freezing the exact current substats
+ *     under-compares them: this re-spends the *same* roll budget
+ *     (`substatRollProfile`) optimally for each set's own gradient and credits
+ *     the difference. Each set is thus judged at its own best use of equal
+ *     investment.
+ *
+ * Resin is the full-set acquisition cost (`fullSetAcquisitionResin`).
+ *
+ * Caveats: the re-allocation uses the linearized gradient, so it's a ballpark
+ * for large substat shifts (stat caps / diminishing returns aren't modeled
+ * beyond what the gradient's wide probe already captures); `setBonusOnlyDelta`'s
+ * empty-slot limitation still applies; and if the set bonus doesn't affect
+ * your *selected optimization target*, this is correctly ~0 — check the
+ * target, not the set.
  */
 export function estimateArtifactSetSwitchAnalytic(
   database: ArtCharDatabase,
@@ -617,15 +897,27 @@ export function estimateArtifactSetSwitchAnalytic(
   setKey: ArtifactSetKey,
   rarity: ArtifactRarity
 ): ArtifactFarmResult {
-  const gradient = computeCombinedGradient(database, targets, charKey)
-
-  // The set bonus is a joint effect of the whole build's piece count, not
-  // any one slot — splitting it evenly across the 5 slots is an
-  // approximation, but it's what lets each slot's pass-1/pass-2 gate
-  // reflect "is this worth it once the set bonus is factored in."
   const bonusDelta = setBonusOnlyDelta(database, targets, charKey, setKey)
-  const bonusSharePerSlot = bonusDelta / allArtifactSlotKeys.length
 
+  // Equal-roll-value re-allocation: the current build's roll budget, re-spent
+  // optimally under each set's *own* gradient. The new set's gradient is
+  // measured with the pieces relabeled (its set bonus shifts which substats
+  // matter); the difference is what "same roll value, but each set's
+  // substats" adds beyond the raw set-bonus delta.
+  const profile = substatRollProfile(database, charKey)
+  const gradientCur = computeCombinedGradient(database, targets, charKey)
+  const relabeled = cloneDatabase(database)
+  relabelEquippedToSet(relabeled, database, charKey, setKey)
+  const gradientNew = computeCombinedGradient(relabeled, targets, charKey)
+  const reallocAdjustment =
+    reallocationGain(gradientNew, profile, rarity) -
+    reallocationGain(gradientCur, profile, rarity)
+
+  const expectedDeltaScore = bonusDelta + reallocAdjustment
+
+  // Per-slot farm breakdown (reusing the current-set gradient), set-bonus
+  // share folded in, kept for auditing which slots a switch helps.
+  const bonusSharePerSlot = bonusDelta / allArtifactSlotKeys.length
   const perSlot = {} as Record<ArtifactSlotKey, SlotFarmBreakdown>
   for (const slotKey of allArtifactSlotKeys) {
     perSlot[slotKey] = slotFarmEstimate(
@@ -633,12 +925,19 @@ export function estimateArtifactSetSwitchAnalytic(
       charKey,
       slotKey,
       rarity,
-      gradient,
+      gradientCur,
       bonusSharePerSlot
     )
   }
 
-  return { ...combineSlotFarmBreakdowns(perSlot, rarity), perSlot }
+  const resinCost = fullSetAcquisitionResin(database, charKey, rarity)
+  return {
+    samples: 1, // analytic — no sampling loop
+    expectedDeltaScore,
+    resinCost,
+    efficiency: resinCost > 0 ? expectedDeltaScore / resinCost : 0,
+    perSlot,
+  }
 }
 
 /**

@@ -108,7 +108,11 @@ function TeamTargetHoverCard({
 }) {
   const database = useDatabase()
   useDataManagerValues(database.teamChars)
-  const anchorRef = useRef<HTMLDivElement>(null)
+  // Track the anchor element in state, not a ref: the popover can be `open`
+  // on the same render the anchor first mounts (the mouse is already over the
+  // just-selected card), and a ref mutation wouldn't re-render to let Popper
+  // re-read it — leaving it anchored to `null`, which MUI pins to (0,0).
+  const [anchorEl, setAnchorEl] = useState<HTMLDivElement | null>(null)
   const team = database.teams.get(teamId)
 
   const characterRows = useMemo(() => {
@@ -130,10 +134,10 @@ function TeamTargetHoverCard({
   if (!team || !characterRows.length) return null
 
   return (
-    <Box ref={anchorRef}>
+    <Box ref={setAnchorEl}>
       <Popper
-        open={open}
-        anchorEl={anchorRef.current}
+        open={open && !!anchorEl}
+        anchorEl={anchorEl}
         placement="bottom-start"
         sx={{ zIndex: 1300, width: 760 }}
       >

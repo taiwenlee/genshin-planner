@@ -89,7 +89,7 @@ function flat(value: number): ResinCostRange {
   return { low: value, high: value }
 }
 
-function resinCostOf(
+export function resinCostOf(
   database: ArtCharDatabase,
   action: ResinAction
 ): ResinCostRange {

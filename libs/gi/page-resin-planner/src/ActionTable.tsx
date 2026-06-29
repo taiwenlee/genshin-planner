@@ -8,12 +8,11 @@ import { allArtifactRarityKeys } from '@genshin-optimizer/gi/consts'
 import { useDatabase } from '@genshin-optimizer/gi/db-ui'
 import { useDBMeta } from '@genshin-optimizer/gi/db-ui'
 import type {
-  AggregatedActionEfficiency,
   ResinAction,
   ScoreTarget,
 } from '@genshin-optimizer/gi/resin-planner'
 import {
-  aggregateActionAcrossTeams,
+  aggregateActionsForCharacter,
   estimateArtifactFarmAnalytic,
   estimateArtifactSetSwitchAnalytic,
   scoreNodeForTeamMember,
@@ -33,6 +32,7 @@ import {
   Typography,
 } from '@mui/material'
 import { useState } from 'react'
+import { CharacterInfoTooltip } from './CharacterInfoTooltip'
 import { buildResinActions } from './buildResinActions'
 import { resolveTargetNode } from './resolveTargetNode'
 import type { TargetSelectionState } from './types'
@@ -155,6 +155,9 @@ export function ActionTable({
       // looks like it swings 50% while barely moving the team total, and a
       // main carry's already-huge number looks artificially tiny.
       const teamBaselineByTeamId = new Map<string, number>()
+      // Per-target baselines are reused by the action aggregation below
+      // (identical for every action), so compute each exactly once here.
+      const baselineByTarget = new Map<ScoreTarget, number>()
       for (const target of scoreTargets) {
         const score =
           scoreNodeForTeamMember(
@@ -163,6 +166,7 @@ export function ActionTable({
             target.charKey,
             target.node
           ) ?? 0
+        baselineByTarget.set(target, score)
         teamBaselineByTeamId.set(
           target.teamId,
           (teamBaselineByTeamId.get(target.teamId) ?? 0) + score
@@ -210,15 +214,20 @@ export function ActionTable({
           0
         )
         const actions = buildResinActions(database, charKey)
-        for (const action of actions) {
-          const aggregated: AggregatedActionEfficiency =
-            aggregateActionAcrossTeams(database, scoreTargets, action)
+        const aggregatedActions = aggregateActionsForCharacter(
+          database,
+          scoreTargets,
+          charKey,
+          actions,
+          baselineByTarget
+        )
+        for (const aggregated of aggregatedActions) {
           const avgResinCost =
             (aggregated.resinCost + aggregated.resinCostHigh) / 2
           const efficiency =
             (aggregated.efficiency + aggregated.efficiencyHigh) / 2
           ranked.push({
-            action,
+            action: aggregated.action,
             charKey,
             totalDeltaScore: aggregated.totalDeltaScore,
             totalBaseline,
@@ -407,10 +416,22 @@ function RankedActionsTable({
             return (
               <TableRow key={i}>
                 <TableCell>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <CharIconSide characterKey={row.charKey} sideMargin />
-                    <CharacterName characterKey={row.charKey} gender={gender} />
-                  </Box>
+                  <CharacterInfoTooltip charKey={row.charKey}>
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1,
+                        cursor: 'help',
+                      }}
+                    >
+                      <CharIconSide characterKey={row.charKey} sideMargin />
+                      <CharacterName
+                        characterKey={row.charKey}
+                        gender={gender}
+                      />
+                    </Box>
+                  </CharacterInfoTooltip>
                 </TableCell>
                 <TableCell>{describeAction(row.action)}</TableCell>
                 <TableCell align="right">
