@@ -7,6 +7,7 @@ import {
   RESIN_PER_TALENT_BOOK,
   RESIN_PER_WEAPON_MATERIAL,
   RESIN_PER_WEEKLY_BOSS_MATERIAL,
+  TALENT_LEVEL_RANGE_BREAKPOINTS,
   WEAPON_ASCENSION_MORA_COST_BY_RARITY_AND_PHASE,
   WEAPON_LEVEL_EXP_REQUIRED,
   WEAPON_LEVEL_RANGE_MORA_COST,
@@ -69,8 +70,9 @@ export function resinCostOfAscensionItems(upgrade: {
 
 /** Talent level -> book rarity. Standardized across every character: level 2 needs 2★ Teachings, 3-6 need 3★ Guide, 7-10 need 4★ Philosophies. */
 function talentBookRarityForLevel(level: number): 2 | 3 | 4 {
-  if (level <= 2) return 2
-  if (level <= 6) return 3
+  const [, tier2Max, tier3Max] = TALENT_LEVEL_RANGE_BREAKPOINTS
+  if (level <= tier2Max) return 2
+  if (level <= tier3Max) return 3
   return 4
 }
 

@@ -205,6 +205,16 @@ export function resinCostToLevelArtifact(rarity: ArtifactRarity): number {
 export const LEVEL_RANGE_BREAKPOINTS = [1, 20, 40, 50, 60, 70, 80, 90] as const
 
 /**
+ * Talent-level boundaries where the required book rarity changes: level 2
+ * needs 2★ Teachings, 3-6 need 3★ Guide, 7-10 need 4★ Philosophies (see
+ * `talentBookRarityForLevel` in `materialResinCost.ts`). A real farming run
+ * buys/redeems a whole batch of one book tier and dumps it all in rather
+ * than stopping after a single level, so these are the natural points to
+ * compress a run of single-level talent actions into one multi-level action.
+ */
+export const TALENT_LEVEL_RANGE_BREAKPOINTS = [1, 2, 6, 10] as const
+
+/**
  * Mora cost per level range, from the character-leveling wiki table's
  * "Mora Cost [subtotal]" column. Not a flat ratio of EXP — the real ratio
  * varies slightly per range (0.2013 for 1->20, ~0.2000 for the rest), so
