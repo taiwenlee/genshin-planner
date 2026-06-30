@@ -66,7 +66,11 @@ export function DistributionChart({
           if (!node) continue
           const value =
             scoreNodeForTeamMember(database, teamId, entry.charKey, node) ?? 0
-          row[entry.charKey] = value
+          // A non-finite score (NaN/Infinity — e.g. a custom multi-target
+          // that doesn't fully resolve) would poison recharts' Y-axis
+          // domain/scale computation. Clamp to a finite number so the chart
+          // can always lay out.
+          row[entry.charKey] = Number.isFinite(value) ? value : 0
         }
         return row
       }),
@@ -111,12 +115,8 @@ export function DistributionChart({
                 dataKey={charKey}
                 stackId="team"
                 fill={color ?? theme.palette.info.main}
-                // Disable recharts' enter animation. Animated series mount
-                // react-smooth's <TransitionGroup>, whose componentDidMount
-                // setState gets caught in React 18's offscreen-reveal loop on
-                // this page and trips the nested-update limit (error #185).
-                // The other charts in this repo disable animation for the same
-                // reason (see TabOptimize ChartCard).
+                // Disable recharts' enter animation, matching the other
+                // charts in this repo (see TabOptimize ChartCard).
                 isAnimationActive={false}
               />
             )
