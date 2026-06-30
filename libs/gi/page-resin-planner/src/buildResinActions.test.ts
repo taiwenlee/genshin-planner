@@ -3,7 +3,10 @@ import { charKeyToLocCharKey } from '@genshin-optimizer/gi/consts'
 import { ArtCharDatabase, defaultInitialWeapon } from '@genshin-optimizer/gi/db'
 import { buildResinActions } from './buildResinActions'
 
-function findAction(actions: ReturnType<typeof buildResinActions>, kind: string) {
+function findAction(
+  actions: ReturnType<typeof buildResinActions>,
+  kind: string
+) {
   return actions.find((a) => a.kind === kind)
 }
 

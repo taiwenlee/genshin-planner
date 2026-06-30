@@ -14,9 +14,7 @@ function nextAscension(ascension: AscensionKey): AscensionKey {
  * (see that constant's doc comment).
  */
 function nextTalentBookTierLevel(currentLevel: number): number {
-  return (
-    TALENT_LEVEL_RANGE_BREAKPOINTS.find((bp) => bp > currentLevel) ?? 10
-  )
+  return TALENT_LEVEL_RANGE_BREAKPOINTS.find((bp) => bp > currentLevel) ?? 10
 }
 
 /**

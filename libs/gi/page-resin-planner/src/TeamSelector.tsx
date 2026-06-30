@@ -105,9 +105,7 @@ function TeamSelectorItem({
         }}
       >
         <Suspense
-          fallback={
-            <Skeleton variant="rectangular" width="100%" height={80} />
-          }
+          fallback={<Skeleton variant="rectangular" width="100%" height={80} />}
         >
           <TeamCardCompact
             teamId={teamId}
