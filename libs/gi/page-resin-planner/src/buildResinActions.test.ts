@@ -77,6 +77,43 @@ describe('buildResinActions', () => {
     expect(burstUp).toMatchObject({ levels: 3 }) // 7 -> 10 (4★ tier boundary)
   })
 
+  test('talentLevelUp is fully gated until ascension 2 (talentLimits caps at 1)', () => {
+    database.chars.set('Bennett', {
+      key: 'Bennett',
+      level: 20,
+      ascension: 1,
+      constellation: 0,
+      talent: { auto: 1, skill: 1, burst: 1 },
+    })
+    database.weapons.new({
+      ...defaultInitialWeapon('sword'),
+      location: charKeyToLocCharKey('Bennett'),
+    })
+
+    const actions = buildResinActions(database, 'Bennett')
+    expect(actions.filter((a) => a.kind === 'talentLevelUp')).toHaveLength(0)
+  })
+
+  test('talentLevelUp stops at the ascension-phase talent cap even mid book tier', () => {
+    database.chars.set('Bennett', {
+      key: 'Bennett',
+      level: 50,
+      ascension: 3, // talentLimits[3] === 4, well short of the level 6 book-tier boundary
+      constellation: 0,
+      talent: { auto: 2, skill: 2, burst: 2 },
+    })
+    database.weapons.new({
+      ...defaultInitialWeapon('sword'),
+      location: charKeyToLocCharKey('Bennett'),
+    })
+
+    const actions = buildResinActions(database, 'Bennett')
+    const autoUp = actions.find(
+      (a) => a.kind === 'talentLevelUp' && a.talent === 'auto'
+    )
+    expect(autoUp).toMatchObject({ levels: 2 }) // 2 -> 4, capped by ascension, not the level-6 book boundary
+  })
+
   test('compresses weaponLevelUp to the current ascension phase cap', () => {
     database.chars.set('Bennett', {
       key: 'Bennett',

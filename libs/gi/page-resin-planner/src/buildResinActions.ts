@@ -1,5 +1,5 @@
 import type { AscensionKey, CharacterKey } from '@genshin-optimizer/gi/consts'
-import { ascensionMaxLevel } from '@genshin-optimizer/gi/consts'
+import { ascensionMaxLevel, talentLimits } from '@genshin-optimizer/gi/consts'
 import type { ArtCharDatabase } from '@genshin-optimizer/gi/db'
 import type { ResinAction } from '@genshin-optimizer/gi/resin-planner'
 import { TALENT_LEVEL_RANGE_BREAKPOINTS } from '@genshin-optimizer/gi/resin-planner'
@@ -21,15 +21,17 @@ function nextTalentBookTierLevel(currentLevel: number): number {
 
 /**
  * Enumerates the resin actions still available to `charKey` (skips
- * maxed-out stats), each spanning as many levels as a single real
- * farming/upgrade pass would cover: level-ups run to the current ascension
- * phase's level cap, talent-ups run to the next book-rarity tier boundary —
- * a player dumps a whole batch of EXP material or a whole book tier in at
- * once rather than stopping after one level for no reason. This also keeps
- * the candidate list itself small (one action per stat, not one per level),
- * which matters for the ranked-action table: it scores every candidate
- * action per call, so collapsing same-tier levels into one action avoids
- * re-scoring the same plateau over and over.
+ * maxed-out and not-yet-unlocked stats), each spanning as many levels as a
+ * single real farming/upgrade pass would cover: level-ups run to the
+ * current ascension phase's level cap, talent-ups run to the next
+ * book-rarity tier boundary (further capped by `talentLimits[ascension]`,
+ * since talents are gated behind ascension phase independent of book
+ * tier) — a player dumps a whole batch of EXP material or a whole book
+ * tier in at once rather than stopping after one level for no reason.
+ * This also keeps the candidate list itself small (one action per stat,
+ * not one per level), which matters for the ranked-action table: it scores
+ * every candidate action per call, so collapsing same-tier levels into one
+ * action avoids re-scoring the same plateau over and over.
  */
 export function buildResinActions(
   database: ArtCharDatabase,
@@ -56,15 +58,22 @@ export function buildResinActions(
       charKey,
       toAscension: nextAscension(char.ascension),
     })
+  // Talent level is also gated by ascension phase — independent of the
+  // book-tier breakpoints above, a character can't level talents past
+  // `talentLimits[ascension]` until they ascend further (e.g. capped at 1
+  // until ascension 2, then 2/4/6/8/10 at ascension 2-6).
+  const talentCap = talentLimits[char.ascension]
   for (const talent of ['auto', 'skill', 'burst'] as const) {
     const level = char.talent[talent]
-    if (level < 10)
+    if (level < talentCap) {
+      const target = Math.min(nextTalentBookTierLevel(level), talentCap)
       actions.push({
         kind: 'talentLevelUp',
         charKey,
         talent,
-        levels: nextTalentBookTierLevel(level) - level,
+        levels: target - level,
       })
+    }
   }
   if (weapon) {
     if (weapon.level < ascensionMaxLevel[weapon.ascension])
