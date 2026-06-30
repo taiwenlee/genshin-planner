@@ -97,7 +97,7 @@ function describeAction(action: DisplayAction): string {
     case 'artifactSwap':
       return `Swap ${action.slotKey} artifact`
     case 'artifactFarm':
-      return `Farm artifact domain (analytic estimate)`
+      return `Farm artifact domain`
     case 'artifactSetFarm':
       return `Switch to ${action.setKey} set (analytic estimate)`
   }
