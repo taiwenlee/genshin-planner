@@ -5,8 +5,15 @@ import type {
   GenderKey,
 } from '@genshin-optimizer/gi/consts'
 import { allArtifactRarityKeys } from '@genshin-optimizer/gi/consts'
+import type { ArtCharDatabase } from '@genshin-optimizer/gi/db'
 import { useDatabase } from '@genshin-optimizer/gi/db-ui'
 import { useDBMeta } from '@genshin-optimizer/gi/db-ui'
+import type { FarmDayGroup } from '@genshin-optimizer/gi/mats'
+import {
+  FARM_DAY_GROUP_LABEL,
+  getTalentBookDayGroup,
+  getWeaponAscensionDayGroup,
+} from '@genshin-optimizer/gi/mats'
 import type {
   ResinAction,
   ScoreTarget,
@@ -29,6 +36,8 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from '@mui/material'
 import { useState } from 'react'
@@ -57,6 +66,30 @@ type RankedAction = {
   totalBaseline: number
   avgResinCost: number
   efficiency: number
+  /** Which weekday group (Mon/Thu, Tue/Fri, Wed/Sat) the action's domain material drops on — `undefined` for actions with no domain-weekday-gated material (e.g. leveling, refinement, artifacts). */
+  dayGroup: FarmDayGroup | undefined
+}
+
+/** Talent book series only depend on the talent's material family, not its current level, so the level-2 book (always present) is used as the family reference. Weapon ascension gems are likewise stable across phases, so the equipped weapon's phase-1 gem is the reference. */
+function getActionDayGroup(
+  database: ArtCharDatabase,
+  charKey: CharacterKey,
+  action: DisplayAction
+): FarmDayGroup | undefined {
+  switch (action.kind) {
+    case 'talentLevelUp':
+      return getTalentBookDayGroup(
+        charKey,
+        action.talent === 'auto' ? 'normal' : action.talent
+      )
+    case 'weaponAscension': {
+      const char = database.chars.get(charKey)
+      const weapon = char && database.weapons.get(char.equippedWeapon)
+      return weapon ? getWeaponAscensionDayGroup(weapon.key) : undefined
+    }
+    default:
+      return undefined
+  }
 }
 
 // Efficiency is scaled to "%ΔDamage per one domain run's worth of resin"
@@ -123,6 +156,10 @@ export function ActionTable({
   )
   const [calculating, setCalculating] = useState(false)
   const [progress, setProgress] = useState<{ done: number; total: number }>()
+  // `undefined` means no filter — show every row regardless of farm day.
+  const [dayFilter, setDayFilter] = useState<FarmDayGroup | undefined>(
+    undefined
+  )
 
   const entries = Object.values(targets).filter(
     (e) => selectedTeamIds.includes(e.teamId) && e.optimizationTarget
@@ -233,6 +270,7 @@ export function ActionTable({
             totalBaseline,
             avgResinCost,
             efficiency,
+            dayGroup: getActionDayGroup(database, charKey, aggregated.action),
           })
           await tick()
         }
@@ -255,6 +293,7 @@ export function ActionTable({
             totalBaseline,
             avgResinCost: farmResult.resinCost,
             efficiency: farmResult.efficiency,
+            dayGroup: undefined,
           })
           await tick()
 
@@ -273,6 +312,7 @@ export function ActionTable({
               totalBaseline,
               avgResinCost: result.resinCost,
               efficiency: result.efficiency,
+              dayGroup: undefined,
             })
             await tick()
           }
@@ -321,10 +361,18 @@ export function ActionTable({
     }
   }
 
+  // Rows with no domain-weekday-gated material (e.g. leveling, refinement,
+  // artifacts) are doable any day, so they pass every filter — only rows
+  // tied to a specific day group get excluded when it doesn't match.
+  const matchesDayFilter = (row: RankedAction) =>
+    !dayFilter || !row.dayGroup || row.dayGroup === dayFilter
+  const filteredPaidRows = paidRows?.filter(matchesDayFilter)
+  const filteredFreeRows = freeRows?.filter(matchesDayFilter)
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-        <Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <LoadingButton
             variant="contained"
             color="info"
@@ -334,6 +382,21 @@ export function ActionTable({
           >
             Calculate
           </LoadingButton>
+          <ToggleButtonGroup
+            size="small"
+            value={dayFilter ?? 'all'}
+            exclusive
+            onChange={(_, value) =>
+              setDayFilter(value === 'all' ? undefined : value)
+            }
+          >
+            <ToggleButton value="all">All days</ToggleButton>
+            {(['monThu', 'tueFri', 'wedSat'] as const).map((group) => (
+              <ToggleButton key={group} value={group}>
+                {FARM_DAY_GROUP_LABEL[group]}
+              </ToggleButton>
+            ))}
+          </ToggleButtonGroup>
         </Box>
         {progress && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -353,18 +416,18 @@ export function ActionTable({
           </Box>
         )}
       </Box>
-      {paidRows && (
+      {filteredPaidRows && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
           <Typography variant="subtitle1">Ranked resin actions</Typography>
           <RankedActionsTable
-            rows={paidRows}
+            rows={filteredPaidRows}
             gender={gender}
             efficiencyHeader={`Efficiency (%ΔDmg/${EFFICIENCY_RESIN_UNIT} Resin)`}
-            emptyMessage="No resin actions available — every selected character is fully leveled, ascended, and refined."
+            emptyMessage="No resin actions available — every selected character is fully leveled, ascended, and refined, or none match the selected farm day."
           />
         </Box>
       )}
-      {freeRows && (
+      {filteredFreeRows && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
           <Typography variant="subtitle1">
             Free improvements (no resin cost — usually Mora/Mora-and-fodder
@@ -372,10 +435,10 @@ export function ActionTable({
             money, not resin)
           </Typography>
           <RankedActionsTable
-            rows={freeRows}
+            rows={filteredFreeRows}
             gender={gender}
             efficiencyHeader="%ΔDamage"
-            emptyMessage="No free improvements available."
+            emptyMessage="No free improvements available, or none match the selected farm day."
           />
         </Box>
       )}
@@ -401,6 +464,7 @@ function RankedActionsTable({
           <TableRow>
             <TableCell>Character</TableCell>
             <TableCell>Action</TableCell>
+            <TableCell>Farm Day</TableCell>
             <TableCell align="right">ΔDamage</TableCell>
             <TableCell align="right">%ΔDamage</TableCell>
             <TableCell align="right">Avg Resin Cost</TableCell>
@@ -434,6 +498,9 @@ function RankedActionsTable({
                   </CharacterInfoTooltip>
                 </TableCell>
                 <TableCell>{describeAction(row.action)}</TableCell>
+                <TableCell>
+                  {row.dayGroup ? FARM_DAY_GROUP_LABEL[row.dayGroup] : 'Any'}
+                </TableCell>
                 <TableCell align="right">
                   {row.totalDeltaScore.toFixed(1)}
                 </TableCell>
@@ -447,7 +514,7 @@ function RankedActionsTable({
           })}
           {!rows.length && (
             <TableRow>
-              <TableCell colSpan={6}>
+              <TableCell colSpan={7}>
                 <Typography color="text.secondary">{emptyMessage}</Typography>
               </TableCell>
             </TableRow>
